@@ -1,0 +1,10 @@
+{
+  "MaxTargetTemperature": 2000,
+  "MinTargetTemperature": 21,
+  "MaxDeltaTemperature": 100,
+  "MinDeltaTemperature": 5,
+  "MaxTargetHoldTime": 3600,
+  "MinTargetHoldTime": 10
+ 
+}
+
