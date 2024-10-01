@@ -14,10 +14,11 @@
 
 class TestState {
 public:
-	TestState() : current_state_(State::IDLE), on_idle_(nullptr), on_start_(nullptr), on_shutdown_(nullptr), on_unknown_(nullptr) {}
+	TestState() : current_state_(State::IDLE), on_idle_(nullptr), on_start_(nullptr), on_cooldown_(nullptr), on_shutdown_(nullptr), on_unknown_(nullptr) {}
 
     void setInitCallback(std::function<void()> call_back);
     void setRunningCallback(std::function<void()> call_back);
+	void setCooldownCallback(std::function<void()> call_back);
     void setShutdownCallback(std::function<void()> call_back);
 	void setUnknownCallback(std::function<void()> call_back);
 
@@ -27,7 +28,7 @@ public:
 
 private:
 	State current_state_;
-	std::function<void()> on_idle_, on_start_, on_shutdown_, on_unknown_;
+	std::function<void()> on_idle_, on_start_, on_cooldown_, on_shutdown_, on_unknown_;
 };
 
 #endif

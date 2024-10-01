@@ -1,3 +1,4 @@
+#include "WallPowerSensor.h"
 #include "CommunicationHandler.h"
 #include "TestEngine.h"
 

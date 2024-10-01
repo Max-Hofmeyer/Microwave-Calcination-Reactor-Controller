@@ -3,12 +3,21 @@
 TestEngine::TestEngine() : test_specs_() {
 	test_state_.setInitCallback(std::bind(&TestEngine::onIdle, this));
 	test_state_.setRunningCallback(std::bind(&TestEngine::onStart, this));
+	test_state_.setCooldownCallback(std::bind(&TestEngine::onCooldown, this));
 	test_state_.setShutdownCallback(std::bind(&TestEngine::onStop, this));
 	test_state_.setUnknownCallback(std::bind(&TestEngine::onUnknown, this));
 }
 
 //if a test is running, grab temperature data, update the control loop, and raise the data ready event
 void TestEngine::update() {
+	if (test_state_.getCurrentState() == State::COOLDOWN) {
+		double temperature = temperature_sensor_.getTemperature();
+		//todo get wall power
+		const auto data = DataPacket(temperature, 0, 0, 0);
+		sendData(data);
+		return;
+	}
+
 	if (test_state_.getCurrentState() != State::RUNNING) return;
 
 	unsigned long current_time = millis();
@@ -40,11 +49,18 @@ void TestEngine::onCommandReceived(const CommandPacket& command_packet) {
 			test_specs_ = command_packet.test_spec_packet;
 			test_state_.changeState(State::RUNNING);
 			break;
+		case COOLDOWN:
+			test_state_.changeState(State::COOLDOWN);
+			break;
 		case STOP:
 			test_state_.changeState(State::STOPPED);
 			break;
 		case BAD_COMMAND:
 			test_state_.changeState(State::UNKNOWN);
+			break;
+		case DATA:
+			break;
+		case DEBUG:
 			break;
 		default:
 			break;
@@ -59,6 +75,7 @@ void TestEngine::setDataCommandCallback(const CommandCallBack& callback) {
 	send_data_command_callback_ = callback;
 }
 
+//these functions will be invoked by the event, so before update() is ran
 void TestEngine::onIdle() {
 	digitalWrite(RELAY_PIN, LOW);
 	pingBackCommand();
@@ -67,6 +84,11 @@ void TestEngine::onIdle() {
 void TestEngine::onStart() {
 	control_loop_.configure(test_specs_);
 	temperature_sensor_.begin();
+	pingBackCommand();
+}
+
+void TestEngine::onCooldown() {
+	digitalWrite(RELAY_PIN, LOW);
 	pingBackCommand();
 }
 
@@ -96,4 +118,8 @@ void TestEngine::callbackDataCommand(const CommandPacket& command_packet) {
 	if(send_data_command_callback_) {
 		send_data_command_callback_(command_packet);	
 	}
+}
+
+void TestEngine::sendDebugCommand(const std::string& debug_message) {
+	const auto command = CommandPacket(DEBUG, DEBUG ^ 0xFF, debug_message);
 }

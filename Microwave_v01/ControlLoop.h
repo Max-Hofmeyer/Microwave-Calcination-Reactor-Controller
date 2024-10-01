@@ -19,8 +19,8 @@ public:
 	unsigned long getTotalSetpointTime();
 private:
 
-	TestSpecPacket test_specs_;
 	unsigned long total_setpoint_time_;
+	TestSpecPacket test_specs_;
 	bool relay_on_, set_point_reached_ = false;
 };
 

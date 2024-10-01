@@ -19,7 +19,7 @@ public:
 	CommunicationHandler() = default;
 
 	void update();
-	void sendCommand(const CommandPacket& packet, bool is_data = false);
+	void sendCommand(const CommandPacket& packet);
 	void pushData(const CommandPacket& packet);
 	CommandPacket getReceivedCommand() const;
 	CommandPacket getSentCommand() const;

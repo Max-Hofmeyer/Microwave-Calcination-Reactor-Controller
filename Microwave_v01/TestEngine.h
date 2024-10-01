@@ -29,11 +29,13 @@ public:
 private:
 	void onIdle();
 	void onStart();
+	void onCooldown();
 	void onStop();
 	void onUnknown();
 	void sendData(const DataPacket& data_packet);
 	void pingBackCommand();
 	void callbackDataCommand(const CommandPacket& command_packet);
+	void sendDebugCommand(const std::string& debug_message);
 
 	TestState test_state_;
 	TemperatureSensor temperature_sensor_;

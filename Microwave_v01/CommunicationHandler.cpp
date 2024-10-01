@@ -7,7 +7,7 @@ void CommunicationHandler::update() {
 }
 
 //send command packet through serial port 
-void CommunicationHandler::sendCommand(const CommandPacket &packet, bool is_data) {
+void CommunicationHandler::sendCommand(const CommandPacket &packet) {
 	JsonDocument serialize_command;
 	serialize_command["Command"] = packet.command;
 	serialize_command["Checksum"] = packet.checksum;
@@ -23,13 +23,14 @@ void CommunicationHandler::sendCommand(const CommandPacket &packet, bool is_data
 	data_packet["MagnetronPowerValue"] = packet.data_packet.magnetron_power_value;
 	data_packet["ReflectedPowerValue"] = packet.data_packet.reflected_power_value;
 
+	serialize_command["DebugMessage"] = packet.debug_message;
+
 	String json_stream;
 	serializeJson(serialize_command, json_stream);
 	json_stream += ":d:";
 
 	command_last_sent_ = packet;
 	Serial.print(json_stream);
-	//Serial2.print(json_stream);
 }
 
 //pushes data onto the internal data queue
@@ -67,6 +68,7 @@ void CommunicationHandler::readSerial() {
 	}
 }
 
+//buffers data output to prevent the serial port from getting bogged down
 void CommunicationHandler::sendData() {
 	if (data_queue_.empty()) return;
 
@@ -74,7 +76,7 @@ void CommunicationHandler::sendData() {
 
 	if (current_time - last_time_data_out_ >= data_out_rate_) {
 		const CommandPacket data = data_queue_.front();
-		sendCommand(data, true);
+		sendCommand(data);
 
 		last_time_data_out_ = current_time;
 		data_queue_.pop();
@@ -89,7 +91,6 @@ CommandPacket CommunicationHandler::deserializeBuffer(const String& json_string)
 
 	//todo add logging
 	if (error) {
-		//Serial2.println("Error while deserializing");
 		return packet;
 	}
 
