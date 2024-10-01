@@ -108,8 +108,8 @@ public class TestManager(Config config)
 
     public void SendStartTestCommand()
     {
-        if (!IsTestReady())
-            throw new ConfigurationErrorsException("Test specifications have not been entered or they are invalid");
+        //if (!IsTestReady())
+        //    throw new ConfigurationErrorsException("Test specifications have not been entered or they are invalid");
 
         var testSpecs = new TestSpecPacket
         {
@@ -125,6 +125,11 @@ public class TestManager(Config config)
             TestSpecs = testSpecs,
         };
 
+        SendCommandPacket(command);
+    }
+
+    public void SendCooldownCommand() {
+        var command = new CommandPacket { Command = ReactorCommandsEnum.Cooldown };
         SendCommandPacket(command);
     }
 
@@ -168,13 +173,11 @@ public class TestManager(Config config)
 
     public List<double> GetTemperatureValues()
     {
-        //return _testData.Where(packet => packet.IsValid).Select(packet => packet.TemperatureValue).ToList();
         return _testData.Select(packet => packet.TemperatureValue).ToList();
     }
 
     public List<double> GetTimeValues()
     {
-        //return _testData.Where(packet => packet.IsValid).Select(packet => packet.TimeStamp).ToList();
         return _testData.Select(packet => packet.TimeStamp).ToList();
     }
 
@@ -187,7 +190,6 @@ public class TestManager(Config config)
     {
         directory ??= Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
 
-        //todo fix this jank 
         if (_testData.Count != GetTimeValues().Count)
             throw new InvalidOperationException("Mismatch count of data points and timestamps, cannot export");
         var file = "Microwave_Data_" + DateTime.Now.ToString("MM-dd-yyyy_hh-mmtt") + ".csv";
@@ -208,16 +210,18 @@ public class TestManager(Config config)
         CommandRequested?.Invoke(command);
     }
 
-    private bool IsTestReady()
-    {
-        return true;
-        //if (DisableLimits) return true;
-        //if (_targetTemp < config.MinTargetTemperature || _targetTemp > config.MaxTargetTemperature
-        //                                              || _deltaTemp < config.MinDeltaTemperature ||
-        //                                              _deltaTemp > config.MaxDeltaTemperature) return false;
-        //return _targetHoldTime >= config.MinTargetHoldTime && _targetHoldTime <= config.MaxTargetHoldTime;
-    }
+    //private bool IsTestReady()
+    //{
+    //    return true;
+    //    //if (DisableLimits) return true;
+    //    //if (_targetTemp < config.MinTargetTemperature || _targetTemp > config.MaxTargetTemperature
+    //    //                                              || _deltaTemp < config.MinDeltaTemperature ||
+    //    //                                              _deltaTemp > config.MaxDeltaTemperature) return false;
+    //    //return _targetHoldTime >= config.MinTargetHoldTime && _targetHoldTime <= config.MaxTargetHoldTime;
+    //}
 
+
+    //todo improve this 
     private void DetermineTestState()
     {
         if (CommandLastSent.Command is ReactorCommandsEnum.Init &&
@@ -237,6 +241,15 @@ public class TestManager(Config config)
             WatchDogTimer.Enabled = true;
             CurrentTestState = TestState.Running;
             return;
+        }
+
+        if (CommandLastSent.Command is ReactorCommandsEnum.Cooldown &&
+            CommandLastReceived.Command is ReactorCommandsEnum.Cooldown)
+        {
+            ResetWatchDog();
+            WatchDogTimer.Enabled = false;
+            CurrentTestState = TestState.CoolingDown;
+
         }
 
         if (CommandLastSent.Command is ReactorCommandsEnum.Stop &&
@@ -311,6 +324,7 @@ public enum TestState
 {
     Idle,
     Running,
+    CoolingDown,
     Stopped,
     Unknown,
     Frozen,

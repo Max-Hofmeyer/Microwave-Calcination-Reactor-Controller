@@ -128,6 +128,7 @@ public enum ReactorCommandsEnum
 {
     Init,
     Start,
+    Cooldown,
     Stop,
     Data,
     InternalError,

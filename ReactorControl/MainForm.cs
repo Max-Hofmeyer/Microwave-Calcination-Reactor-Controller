@@ -27,6 +27,7 @@ public partial class MainForm : Form
         ComPortComboBox.DataSource = ComPortManager.GetAvailableComPorts();
         StopTestButton.Enabled = false;
         StartTestButton.Enabled = false;
+        CoolDownButton.Enabled = false;
         DisconnectCOMButton.Enabled = false;
 
         //TemperaturePlot.Plot.Title("Temperature vs. Time");
@@ -59,6 +60,10 @@ public partial class MainForm : Form
     private void StartTestButton_Click(object sender, EventArgs e) {
         MessageBoxLog(LogLevel.Information, "Sending start command");
         TryStartTest();
+    }
+    private void CoolDownButton_Click(object sender, EventArgs e) {
+        MessageBoxLog(LogLevel.Information, "Sending cooldown command");
+        TryStartCooldown();
     }
 
     private void StopTestButton_Click(object sender, EventArgs e) {
@@ -99,17 +104,17 @@ public partial class MainForm : Form
         TryDisconnectFromPort();
     }
 
-    private void ResetButton_Click(object sender, EventArgs e) {
-        var result = System.Windows.Forms.MessageBox.Show(
-            "Are you sure you want to reset the app? All data is deleted and a running test will be stopped",
-            "Reset?",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Warning
-        );
+    //private void ResetButton_Click(object sender, EventArgs e) {
+    //    var result = System.Windows.Forms.MessageBox.Show(
+    //        "Are you sure you want to reset the app? All data is deleted and a running test will be stopped",
+    //        "Reset?",
+    //        MessageBoxButtons.YesNo,
+    //        MessageBoxIcon.Warning
+    //    );
 
-        if (result != DialogResult.Yes) return;
-        ResetApp();
-    }
+    //    if (result != DialogResult.Yes) return;
+    //    ResetApp();
+    //}
 
     private void ClearMessageButton_Click(object sender, EventArgs e) {
         MessageBox.Text = string.Empty;
@@ -180,6 +185,15 @@ public partial class MainForm : Form
         }
     }
 
+    private void TryStartCooldown() {
+        try {
+            _testManager.SendCooldownCommand();
+        }
+        catch (Exception ex) {
+            MessageBoxLog(LogLevel.Error, "Cooldown command failed: " + ex.Message);
+        }
+    }
+
     private void TryStopTest() {
         try {
             _testManager.SendStopTestCommand();
@@ -220,6 +234,10 @@ public partial class MainForm : Form
             case TestState.Running:
                 MessageBoxLog(LogLevel.Information, "Test is running");
                 LockUI();
+                break;
+
+            case TestState.CoolingDown:
+                MessageBoxLog(LogLevel.Information, "Test is cooling down");
                 break;
 
             case TestState.Stopped:
@@ -267,17 +285,17 @@ public partial class MainForm : Form
         MessageBoxLog(LogLevel.Information, "Chart has been cleared");
     }
 
-    private void ResetApp() {
-        ClearChart();
-        TryStopTest();
-        TryDisconnectFromPort();
-        UnlockUI();
-        _unknownError = false;
-        _watchdogError = false;
-        //todo make reset test a thing in test manager
-        _testManager.CurrentTestState = TestState.Unknown;
-        MessageBoxLog(LogLevel.Information, "App has been reset");
-    }
+    //private void ResetApp() {
+    //    ClearChart();
+    //    TryStopTest();
+    //    TryDisconnectFromPort();
+    //    UnlockUI();
+    //    _unknownError = false;
+    //    _watchdogError = false;
+    //    //todo make reset test a thing in test manager
+    //    _testManager.CurrentTestState = TestState.Unknown;
+    //    MessageBoxLog(LogLevel.Information, "App has been reset");
+    //}
 
     private void UpdateUI() {
         var temperatureData = _testManager.GetTemperatureValues();
@@ -303,6 +321,7 @@ public partial class MainForm : Form
         ConnectButton.Enabled = false;
         DisconnectCOMButton.Enabled = false;
         StopTestButton.Enabled = true;
+        CoolDownButton.Enabled = true;
     }
 
     private void UnlockUI() {
@@ -312,6 +331,7 @@ public partial class MainForm : Form
         ComPortComboBox.Enabled = true;
         ConnectButton.Enabled = true;
         DisconnectCOMButton.Enabled = false;
+        CoolDownButton.Enabled = false;
         StopTestButton.Enabled = false;
     }
 
@@ -332,13 +352,16 @@ public partial class MainForm : Form
         if (level < LogLevel.Information) return;
 
         var stamp = DateTime.Now.ToString("MM/dd/yyyy h:mm tt");
-        var levelLabel = " [" + level + "] ";
+
+        string levelLabel = string.Empty;
+        if (level != LogLevel.Information) {
+            levelLabel = " [" + level + "] ";
+        }
 
         MessageBox.AppendText($"{levelLabel + message + " - " + stamp}\r\n");
         MessageBox.ScrollToCaret();
     }
 
     #endregion UI Helpers
-
 
 }

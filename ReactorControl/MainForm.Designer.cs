@@ -40,11 +40,10 @@
             StopTestButton = new ToolStripButton();
             toolStrip1 = new ToolStrip();
             DisconnectCOMButton = new ToolStripButton();
+            CoolDownButton = new ToolStripButton();
             toolStripSeparator2 = new ToolStripSeparator();
             AutoScaleChartButton = new ToolStripButton();
             ExportButton = new ToolStripButton();
-            ResetButton = new ToolStripButton();
-            OverrideSafeNumbers = new ToolStripButton();
             ClearChartButton = new ToolStripButton();
             toolStripSeparator3 = new ToolStripSeparator();
             MessageBox = new TextBox();
@@ -52,6 +51,8 @@
             label7 = new Label();
             TemperaturePlot = new ScottPlot.WinForms.FormsPlot();
             TestControlPanel = new Panel();
+            textBox1 = new TextBox();
+            label8 = new Label();
             LowestTempBox = new TextBox();
             HighestTempBox = new TextBox();
             CurrentTempBox = new TextBox();
@@ -184,7 +185,7 @@
             // toolStrip1
             // 
             toolStrip1.BackColor = SystemColors.GradientActiveCaption;
-            toolStrip1.Items.AddRange(new ToolStripItem[] { RefreshCOMPorts, DisconnectCOMButton, toolStripSeparator1, StartTestButton, StopTestButton, toolStripSeparator2, AutoScaleChartButton, ExportButton, ResetButton, OverrideSafeNumbers, ClearChartButton, toolStripSeparator3 });
+            toolStrip1.Items.AddRange(new ToolStripItem[] { RefreshCOMPorts, DisconnectCOMButton, toolStripSeparator1, StartTestButton, CoolDownButton, StopTestButton, toolStripSeparator2, AutoScaleChartButton, ExportButton, ClearChartButton, toolStripSeparator3 });
             toolStrip1.Location = new Point(0, 0);
             toolStrip1.Name = "toolStrip1";
             toolStrip1.Size = new Size(1279, 25);
@@ -200,6 +201,16 @@
             DisconnectCOMButton.Size = new Size(70, 22);
             DisconnectCOMButton.Text = "Disconnect";
             DisconnectCOMButton.Click += DisconnectCOMButton_Click;
+            // 
+            // CoolDownButton
+            // 
+            CoolDownButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
+            CoolDownButton.Image = (Image)resources.GetObject("CoolDownButton.Image");
+            CoolDownButton.ImageTransparentColor = Color.Magenta;
+            CoolDownButton.Name = "CoolDownButton";
+            CoolDownButton.Size = new Size(66, 22);
+            CoolDownButton.Text = "Cooldown";
+            CoolDownButton.Click += CoolDownButton_Click;
             // 
             // toolStripSeparator2
             // 
@@ -226,28 +237,6 @@
             ExportButton.Text = "Export Data";
             ExportButton.Click += ExportButton_Click;
             // 
-            // ResetButton
-            // 
-            ResetButton.Alignment = ToolStripItemAlignment.Right;
-            ResetButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
-            ResetButton.Image = (Image)resources.GetObject("ResetButton.Image");
-            ResetButton.ImageTransparentColor = Color.Magenta;
-            ResetButton.Name = "ResetButton";
-            ResetButton.Size = new Size(64, 22);
-            ResetButton.Text = "Reset App";
-            ResetButton.Click += ResetButton_Click;
-            // 
-            // OverrideSafeNumbers
-            // 
-            OverrideSafeNumbers.Alignment = ToolStripItemAlignment.Right;
-            OverrideSafeNumbers.DisplayStyle = ToolStripItemDisplayStyle.Text;
-            OverrideSafeNumbers.Image = (Image)resources.GetObject("OverrideSafeNumbers.Image");
-            OverrideSafeNumbers.ImageTransparentColor = Color.Magenta;
-            OverrideSafeNumbers.Name = "OverrideSafeNumbers";
-            OverrideSafeNumbers.Size = new Size(87, 22);
-            OverrideSafeNumbers.Text = "Override Input";
-            OverrideSafeNumbers.Click += OverrideSafeNumbers_Click;
-            // 
             // ClearChartButton
             // 
             ClearChartButton.Alignment = ToolStripItemAlignment.Right;
@@ -273,14 +262,14 @@
             MessageBox.Name = "MessageBox";
             MessageBox.ReadOnly = true;
             MessageBox.ScrollBars = ScrollBars.Both;
-            MessageBox.Size = new Size(228, 365);
+            MessageBox.Size = new Size(240, 365);
             MessageBox.TabIndex = 0;
             MessageBox.WordWrap = false;
             // 
             // label7
             // 
             label7.AutoSize = true;
-            label7.Location = new Point(35, 11);
+            label7.Location = new Point(37, 11);
             label7.Name = "label7";
             label7.Size = new Size(105, 15);
             label7.TabIndex = 16;
@@ -298,6 +287,8 @@
             // TestControlPanel
             // 
             TestControlPanel.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            TestControlPanel.Controls.Add(textBox1);
+            TestControlPanel.Controls.Add(label8);
             TestControlPanel.Controls.Add(LowestTempBox);
             TestControlPanel.Controls.Add(HighestTempBox);
             TestControlPanel.Controls.Add(CurrentTempBox);
@@ -310,39 +301,58 @@
             TestControlPanel.Size = new Size(1021, 756);
             TestControlPanel.TabIndex = 8;
             // 
+            // textBox1
+            // 
+            textBox1.Font = new Font("Segoe UI", 13F, FontStyle.Bold);
+            textBox1.ForeColor = SystemColors.MenuHighlight;
+            textBox1.Location = new Point(804, 3);
+            textBox1.Name = "textBox1";
+            textBox1.ReadOnly = true;
+            textBox1.Size = new Size(75, 31);
+            textBox1.TabIndex = 28;
+            // 
+            // label8
+            // 
+            label8.AutoSize = true;
+            label8.Location = new Point(696, 11);
+            label8.Name = "label8";
+            label8.Size = new Size(95, 15);
+            label8.TabIndex = 27;
+            label8.Text = "Power Draw (W):";
+            // 
             // LowestTempBox
             // 
             LowestTempBox.Font = new Font("Segoe UI", 13F, FontStyle.Bold);
             LowestTempBox.ForeColor = SystemColors.MenuHighlight;
-            LowestTempBox.Location = new Point(550, 3);
+            LowestTempBox.Location = new Point(586, 3);
             LowestTempBox.Name = "LowestTempBox";
             LowestTempBox.ReadOnly = true;
-            LowestTempBox.Size = new Size(61, 31);
+            LowestTempBox.Size = new Size(75, 31);
             LowestTempBox.TabIndex = 26;
             // 
             // HighestTempBox
             // 
             HighestTempBox.Font = new Font("Segoe UI", 13F, FontStyle.Bold);
             HighestTempBox.ForeColor = Color.OrangeRed;
-            HighestTempBox.Location = new Point(351, 3);
+            HighestTempBox.Location = new Point(368, 3);
             HighestTempBox.Name = "HighestTempBox";
             HighestTempBox.ReadOnly = true;
-            HighestTempBox.Size = new Size(61, 31);
+            HighestTempBox.Size = new Size(75, 31);
             HighestTempBox.TabIndex = 25;
             // 
             // CurrentTempBox
             // 
             CurrentTempBox.Font = new Font("Segoe UI", 13F, FontStyle.Bold);
-            CurrentTempBox.Location = new Point(146, 3);
+            CurrentTempBox.Location = new Point(148, 3);
             CurrentTempBox.Name = "CurrentTempBox";
             CurrentTempBox.ReadOnly = true;
-            CurrentTempBox.Size = new Size(61, 31);
+            CurrentTempBox.Size = new Size(75, 31);
             CurrentTempBox.TabIndex = 24;
             // 
             // label9
             // 
             label9.AutoSize = true;
-            label9.Location = new Point(442, 11);
+            label9.Location = new Point(478, 11);
             label9.Name = "label9";
             label9.Size = new Size(102, 15);
             label9.TabIndex = 23;
@@ -351,7 +361,7 @@
             // label6
             // 
             label6.AutoSize = true;
-            label6.Location = new Point(239, 11);
+            label6.Location = new Point(256, 11);
             label6.Name = "label6";
             label6.Size = new Size(106, 15);
             label6.TabIndex = 21;
@@ -379,7 +389,7 @@
             // 
             // ClearMessageButton
             // 
-            ClearMessageButton.Location = new Point(215, 385);
+            ClearMessageButton.Location = new Point(227, 385);
             ClearMessageButton.Name = "ClearMessageButton";
             ClearMessageButton.Size = new Size(25, 20);
             ClearMessageButton.TabIndex = 14;
@@ -457,9 +467,10 @@
         private NumericUpDown TargetHoldTimeInput;
         private Label label5;
         private Button ClearMessageButton;
-        private ToolStripButton OverrideSafeNumbers;
         private ToolStripButton DisconnectCOMButton;
         private ToolStripSeparator toolStripSeparator3;
-        private ToolStripButton ResetButton;
+        private ToolStripButton CoolDownButton;
+        private TextBox textBox1;
+        private Label label8;
     }
 }
