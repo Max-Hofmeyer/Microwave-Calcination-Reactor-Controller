@@ -14,21 +14,28 @@ namespace ReactorControl
         static void Main() {
             // To customize application configuration such as set high DPI settings or default font,
             // see https://aka.ms/applicationconfiguration.
-            ApplicationConfiguration.Initialize();
+            try
+            {
+                ApplicationConfiguration.Initialize();
 
 
-            var serviceCollection = new ServiceCollection();
-            ConfigureServices(serviceCollection);
+                var serviceCollection = new ServiceCollection();
+                ConfigureServices(serviceCollection);
 
-            var serviceProvider = serviceCollection.BuildServiceProvider();
-            var comPortManager = serviceProvider.GetRequiredService<ComPortManager>();
-            var testManager = serviceProvider.GetRequiredService<TestManager>();
-            var mainForm = serviceProvider.GetRequiredService<MainForm>();
+                var serviceProvider = serviceCollection.BuildServiceProvider();
+                var comPortManager = serviceProvider.GetRequiredService<ComPortManager>();
+                var testManager = serviceProvider.GetRequiredService<TestManager>();
+                var mainForm = serviceProvider.GetRequiredService<MainForm>();
 
-            SubscribeToEvents(comPortManager, testManager);
+                SubscribeToEvents(comPortManager, testManager);
 
-            Application.Run(mainForm);
-            UnsubscribeToEvents(comPortManager, testManager);
+                Application.Run(mainForm);
+                UnsubscribeFromEvents(comPortManager, testManager);
+            }
+            catch
+            {
+                Application.Exit();
+            }
         }
 
         //register the classes since were using dependency injection
@@ -77,7 +84,7 @@ namespace ReactorControl
             testManager.WatchDogTimer.Elapsed += testManager.OnWatchDogElapsed;
         }
 
-        private static void UnsubscribeToEvents(ComPortManager comPortManager, TestManager testManager) {
+        private static void UnsubscribeFromEvents(ComPortManager comPortManager, TestManager testManager) {
             comPortManager.CommandReceived -= testManager.OnCommandReceived;
             testManager.CommandRequested -= comPortManager.OnCommandRequested;
             testManager.WatchDogTimer.Elapsed -= testManager.OnWatchDogElapsed;

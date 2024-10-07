@@ -12,11 +12,9 @@ namespace ReactorControl.Classes;
 
 public class TestManager(Config config)
 {
-    private decimal _targetTemp, _deltaTemp, _targetHoldTime = 0;
+    private decimal _targetTemp, _deltaTemp, _targetHoldTime;
     private bool _disableLimits;
 
-    private CommandPacket _commandLastSent;
-    private CommandPacket _commandLastReceived;
     private TestState _testState = TestState.Unknown;
     private Stopwatch _testTimer = new();
     private List<DataPacket> _testData = [];
@@ -24,6 +22,9 @@ public class TestManager(Config config)
     public event Action<CommandPacket>? CommandRequested;
     public event Action<CommandPacket>? CommandReceived;
     public event Action<TestState>? TestStateChanged;
+
+    public bool TestFinished;
+
     public Timer WatchDogTimer = new()
     {
         Interval = 2000,
@@ -74,31 +75,14 @@ public class TestManager(Config config)
         get => _testState;
         set
         {
-            if (value == _testState) return;
             _testState = value;
             TestStateChanged?.Invoke(_testState);
         }
     }
 
-    private CommandPacket CommandLastSent
-    {
-        get => _commandLastSent;
-        set
-        {
-            if (value.Equals(_commandLastSent)) return;
-            _commandLastSent = value;
+    private CommandPacket CommandLastSent { get; set; }
 
-        }
-    }
-
-    private CommandPacket CommandLastReceived {
-        get => _commandLastReceived;
-        set {
-            if (value.Equals(_commandLastReceived)) return;
-            _commandLastReceived = value;
-
-        }
-    }
+    private CommandPacket CommandLastReceived { get; set; }
 
     public void SendCheckStatusCommand()
     {
@@ -108,9 +92,6 @@ public class TestManager(Config config)
 
     public void SendStartTestCommand()
     {
-        //if (!IsTestReady())
-        //    throw new ConfigurationErrorsException("Test specifications have not been entered or they are invalid");
-
         var testSpecs = new TestSpecPacket
         {
             DeltaTemp = (double)DeltaTemp,
@@ -141,25 +122,15 @@ public class TestManager(Config config)
 
     public void OnCommandReceived(CommandPacket command)
     {
+        CommandLastReceived = command;
         if (command is { Command: ReactorCommandsEnum.Data, DataPacket: not null })
         {
-            ResetWatchDog();
             var data = command.DataPacket.Value;
             data.TimeStamp = _testTimer.Elapsed.TotalSeconds;
             _testData.Add(data);
         }
 
-        //todo log this
-        //if (command is { Command: ReactorCommandsEnum.InternalError })
-        //{
-
-        //}
-
-        if (command is { Command: ReactorCommandsEnum.Stop }) DisableLimits = false;
-
-        CommandLastReceived = command;
-        DetermineTestState();
-
+        UpdateTestState();
         CommandReceived?.Invoke(command);
     }
 
@@ -179,6 +150,11 @@ public class TestManager(Config config)
     public List<double> GetTimeValues()
     {
         return _testData.Select(packet => packet.TimeStamp).ToList();
+    }
+
+    public double GetLatestPowerValue()
+    {
+        return _testData.LastOrDefault().WallPowerValue;
     }
 
     public void ClearData()
@@ -222,86 +198,82 @@ public class TestManager(Config config)
 
 
     //todo improve this 
-    private void DetermineTestState()
+    private void UpdateTestState()
     {
-        if (CommandLastSent.Command is ReactorCommandsEnum.Init &&
-            CommandLastReceived.Command is ReactorCommandsEnum.Init)
+        var newestCommand = CommandLastReceived.Command;
+        var lastSentCommand = CommandLastSent.Command;
+
+        if (newestCommand is ReactorCommandsEnum.Data or ReactorCommandsEnum.Debug && !TestFinished)
         {
-            ResetWatchDog();
-            WatchDogTimer.Enabled = false;
-            CurrentTestState = TestState.Idle;
+            ResetWatchDog(true);
             return;
         }
 
-        if (CommandLastSent.Command is ReactorCommandsEnum.Start &&
-            CommandLastReceived.Command is ReactorCommandsEnum.Start)
+        switch (newestCommand)
         {
-            _testTimer.Restart();
-            ResetWatchDog();
-            WatchDogTimer.Enabled = true;
-            CurrentTestState = TestState.Running;
-            return;
+            case ReactorCommandsEnum.Init when
+                lastSentCommand is ReactorCommandsEnum.Init:
+                CurrentTestState = TestState.Idle;
+                return;
+
+            case ReactorCommandsEnum.Start when
+                lastSentCommand is ReactorCommandsEnum.Start:
+                _testTimer.Restart();
+                ResetWatchDog(true);
+                CurrentTestState = TestState.Running;
+                TestFinished = false;
+                return;
+
+            case ReactorCommandsEnum.Cooldown when
+                lastSentCommand is ReactorCommandsEnum.Cooldown:
+                ResetWatchDog();
+                CurrentTestState = TestState.CoolingDown;
+                return;
+
+            case ReactorCommandsEnum.Stop when
+                lastSentCommand is ReactorCommandsEnum.Stop:
+                ResetWatchDog();
+                CurrentTestState = TestState.Stopped;
+                _testTimer.Stop();
+                return;
+
+            case ReactorCommandsEnum.Stop when
+                lastSentCommand is ReactorCommandsEnum.Start:
+                ResetWatchDog();
+                CurrentTestState = TestState.Stopped;
+                _testTimer.Stop();
+                TestFinished = true;
+                return;
+
+            case ReactorCommandsEnum.InternalError:
+                ResetWatchDog();
+                CurrentTestState = TestState.Unknown;
+                break;
+
+            case ReactorCommandsEnum.Data:
+                break;
+            case ReactorCommandsEnum.Debug:
+                break;
+            default:
+                return;
         }
-
-        if (CommandLastSent.Command is ReactorCommandsEnum.Cooldown &&
-            CommandLastReceived.Command is ReactorCommandsEnum.Cooldown)
-        {
-            ResetWatchDog();
-            WatchDogTimer.Enabled = false;
-            CurrentTestState = TestState.CoolingDown;
-
-        }
-
-        if (CommandLastSent.Command is ReactorCommandsEnum.Stop &&
-            CommandLastReceived.Command is ReactorCommandsEnum.Stop)
-        {
-            ResetWatchDog();
-            WatchDogTimer.Enabled = false;
-            CurrentTestState = TestState.Stopped;
-            _testTimer.Stop();
-
-            return;
-        }
-
-        if ((CommandLastReceived.Command is ReactorCommandsEnum.Data ||
-             CommandLastReceived.Command is ReactorCommandsEnum.Debug ||
-             CommandLastSent.Equals(CommandLastReceived)) &&
-            CommandLastReceived.Command is not ReactorCommandsEnum.InternalError)
-            return;
-
-        WatchDogTimer.Enabled = false;
-        CurrentTestState = TestState.Unknown;
     }
 
-    private void ResetWatchDog()
+    private void ResetWatchDog(bool enable = false)
     {
         WatchDogTimer.Stop();
         WatchDogTimer.Start();
+        WatchDogTimer.Enabled = enable;
     }
 }
 
-public struct CommandPacket : IEquatable<CommandPacket>
+public struct CommandPacket
 {
     public ReactorCommandsEnum Command { get; init; }
     public byte Checksum { get; init; }
     public TestSpecPacket? TestSpecs { get; init; }
     public DataPacket? DataPacket { get; init; }
-    
-    public override bool Equals(object? obj)
-    {
-        return obj is CommandPacket other && Equals(other);
-    }
-
-    public bool Equals(CommandPacket other)
-    {
-        var testSpecsEqual = (TestSpecs == null && other.TestSpecs == null) ||
-                             (TestSpecs != null && other.TestSpecs != null && TestSpecs.Equals(other.TestSpecs));
-
-        var dataPacketEqual = (DataPacket == null && other.DataPacket == null) ||
-                              (DataPacket != null && other.DataPacket != null && DataPacket.Equals(other.DataPacket));
-
-        return testSpecsEqual && dataPacketEqual;
-    }
+    public string? DebugMessage { get; init; }
 }
 
 public struct TestSpecPacket

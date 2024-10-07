@@ -13,7 +13,7 @@ namespace ReactorControl.Classes;
 public class ComPortManager
 {
     private SerialPort? _connectedPort;
-    private string _bufferStream;
+    private StringBuilder _bufferStream = new();
 
     public bool IsConnected;
     public event Action<CommandPacket>? CommandReceived;
@@ -63,7 +63,7 @@ public class ComPortManager
 
     public void HandleFrozenPort()
     {
-        _bufferStream = string.Empty;
+        _bufferStream.Clear();
         var portInfo = _connectedPort;
         DisconnectFromPort();
         
@@ -76,7 +76,7 @@ public class ComPortManager
     {
         if (_connectedPort is null || !_connectedPort.IsOpen) return;
 
-        var serializedCommand = JsonSerializer.Serialize(command) + ":d:";
+        var serializedCommand = JsonSerializer.Serialize(command) + "\n";
         _connectedPort.Write(serializedCommand);
     }
 
@@ -85,7 +85,7 @@ public class ComPortManager
         try
         {
             if (_connectedPort is null || _connectedPort.BytesToRead <= 0) return;
-            _bufferStream += _connectedPort.ReadExisting();
+            _bufferStream.Append(_connectedPort.ReadExisting());
             ProcessBufferStream();
         }
         catch
@@ -95,32 +95,28 @@ public class ComPortManager
     }
     private void ProcessBufferStream()
     {
-        if (!_bufferStream.Contains(":d:"))
-        {
-            //if (_bufferStream.Length > 50)
-            //{
-            //    _bufferStream = string.Empty;
-            //}
+        var rawCommands = _bufferStream.ToString().Split(["\n"], StringSplitOptions.None);
 
-            return;
-        }
+        foreach (var command in rawCommands)
+        {
+            if (command == rawCommands.Last() || string.IsNullOrEmpty(command)) continue;
 
-        var jsonStream = _bufferStream.Replace(":d:", string.Empty);
-        try
-        {
-            var commandPacket = JsonSerializer.Deserialize<CommandPacket>(jsonStream);
-            CommandReceived?.Invoke(commandPacket);
-        }
-        catch
-        {
-            //todo add logging
-            CommandReceived?.Invoke(new CommandPacket { Command = ReactorCommandsEnum.Debug });
-        }
-        finally
-        {
-            _bufferStream = string.Empty;
+            var jsonStream = command.Trim();
+
+            try {
+                var commandPacket = JsonSerializer.Deserialize<CommandPacket>(jsonStream);
+                CommandReceived?.Invoke(commandPacket);
+            }
+            catch {
+                string what = jsonStream;
+                //todo add logging
+                //CommandReceived?.Invoke(new CommandPacket { Command = ReactorCommandsEnum.Debug });
+            }
+
         }
 
+        _bufferStream.Clear();
+        _bufferStream.Append(rawCommands.Last());
     }
 }
 
@@ -128,9 +124,9 @@ public enum ReactorCommandsEnum
 {
     Init,
     Start,
-    Cooldown,
     Stop,
+    Cooldown,
     Data,
-    InternalError,
     Debug,
+    InternalError,
 }

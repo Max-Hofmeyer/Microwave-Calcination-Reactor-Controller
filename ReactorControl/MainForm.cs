@@ -29,6 +29,9 @@ public partial class MainForm : Form
         StartTestButton.Enabled = false;
         CoolDownButton.Enabled = false;
         DisconnectCOMButton.Enabled = false;
+        _testManager.TargetTemp = TargetTempInput.Value;
+        _testManager.DeltaTemp = DeltaTInput.Value;
+        _testManager.TargetHoldTime = TargetHoldTimeInput.Value;
 
         //TemperaturePlot.Plot.Title("Temperature vs. Time");
 
@@ -213,11 +216,29 @@ public partial class MainForm : Form
             case ReactorCommandsEnum.Data:
                 UpdateUI();
                 break;
+
+            case ReactorCommandsEnum.Debug:
+                if (command.DebugMessage is null) break;
+                MessageBoxLog(LogLevel.Critical, command.DebugMessage);
+                break;
+
             case ReactorCommandsEnum.Init:
             case ReactorCommandsEnum.Start:
             case ReactorCommandsEnum.Stop:
+                if (_testManager.TestFinished)
+                {
+                    System.Windows.Forms.MessageBox.Show(
+                        "Setpoint time elapsed, test is finished",
+                        "Finished",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                }
+                
+                break;
+
             case ReactorCommandsEnum.InternalError:
-            case ReactorCommandsEnum.Debug:
+            case ReactorCommandsEnum.Cooldown:
             default:
                 break;
         }
@@ -298,19 +319,29 @@ public partial class MainForm : Form
     //}
 
     private void UpdateUI() {
-        var temperatureData = _testManager.GetTemperatureValues();
-        var timeStamps = _testManager.GetTimeValues();
+        try
+        {
+            var temperatureData = _testManager.GetTemperatureValues();
+            var timeStamps = _testManager.GetTimeValues();
 
-        var highestTemp = temperatureData.Max();
-        var lowestTemp = temperatureData.Min();
-        var currentTemp = temperatureData.LastOrDefault();
+            var highestTemp = temperatureData.Max();
+            var lowestTemp = temperatureData.Min();
+            var currentTemp = temperatureData.LastOrDefault();
+            var currentPower = _testManager.GetLatestPowerValue();
 
-        HighestTempBox.Text = $"{highestTemp:0.00}";
-        LowestTempBox.Text = $"{lowestTemp:0.00}";
-        CurrentTempBox.Text = $"{currentTemp:0.00}";
-        TemperaturePlot.Plot.Clear();
-        TemperaturePlot.Plot.Add.Scatter(timeStamps.ToArray(), temperatureData.ToArray());
-        TemperaturePlot.Refresh();
+            HighestTempBox.Text = $@"{highestTemp:0.0}";
+            LowestTempBox.Text = $@"{lowestTemp:0.0}";
+            CurrentTempBox.Text = $@"{currentTemp:0.0}";
+            PowerDrawTextBox.Text = $@"{currentPower:0.0}";
+
+            TemperaturePlot.Plot.Clear();
+            TemperaturePlot.Plot.Add.Scatter(timeStamps.ToArray(), temperatureData.ToArray());
+            TemperaturePlot.Refresh();
+        }
+        catch
+        {
+            MessageBoxLog(LogLevel.Warning, "Failed to update UI");
+        }
     }
 
     private void LockUI() {
@@ -354,8 +385,13 @@ public partial class MainForm : Form
         var stamp = DateTime.Now.ToString("MM/dd/yyyy h:mm tt");
 
         string levelLabel = string.Empty;
-        if (level != LogLevel.Information) {
+        if (level is not (LogLevel.Information or LogLevel.Critical)) {
             levelLabel = " [" + level + "] ";
+        }
+
+        if (level is LogLevel.Critical)
+        {
+            levelLabel = " [Reactor] ";
         }
 
         MessageBox.AppendText($"{levelLabel + message + " - " + stamp}\r\n");

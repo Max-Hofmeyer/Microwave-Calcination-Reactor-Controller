@@ -51,7 +51,7 @@
             label7 = new Label();
             TemperaturePlot = new ScottPlot.WinForms.FormsPlot();
             TestControlPanel = new Panel();
-            textBox1 = new TextBox();
+            PowerDrawTextBox = new TextBox();
             label8 = new Label();
             LowestTempBox = new TextBox();
             HighestTempBox = new TextBox();
@@ -287,7 +287,7 @@
             // TestControlPanel
             // 
             TestControlPanel.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-            TestControlPanel.Controls.Add(textBox1);
+            TestControlPanel.Controls.Add(PowerDrawTextBox);
             TestControlPanel.Controls.Add(label8);
             TestControlPanel.Controls.Add(LowestTempBox);
             TestControlPanel.Controls.Add(HighestTempBox);
@@ -301,15 +301,15 @@
             TestControlPanel.Size = new Size(1021, 756);
             TestControlPanel.TabIndex = 8;
             // 
-            // textBox1
+            // PowerDrawTextBox
             // 
-            textBox1.Font = new Font("Segoe UI", 13F, FontStyle.Bold);
-            textBox1.ForeColor = SystemColors.MenuHighlight;
-            textBox1.Location = new Point(804, 3);
-            textBox1.Name = "textBox1";
-            textBox1.ReadOnly = true;
-            textBox1.Size = new Size(75, 31);
-            textBox1.TabIndex = 28;
+            PowerDrawTextBox.Font = new Font("Segoe UI", 13F, FontStyle.Bold);
+            PowerDrawTextBox.ForeColor = SystemColors.MenuHighlight;
+            PowerDrawTextBox.Location = new Point(804, 3);
+            PowerDrawTextBox.Name = "PowerDrawTextBox";
+            PowerDrawTextBox.ReadOnly = true;
+            PowerDrawTextBox.Size = new Size(75, 31);
+            PowerDrawTextBox.TabIndex = 28;
             // 
             // label8
             // 
@@ -375,6 +375,7 @@
             TargetHoldTimeInput.Size = new Size(136, 23);
             TargetHoldTimeInput.TabIndex = 12;
             TargetHoldTimeInput.Tag = "";
+            TargetHoldTimeInput.Value = new decimal(new int[] { 30, 0, 0, 0 });
             TargetHoldTimeInput.ValueChanged += TargetHoldTimeInput_ValueChanged;
             // 
             // label5
@@ -470,7 +471,7 @@
         private ToolStripButton DisconnectCOMButton;
         private ToolStripSeparator toolStripSeparator3;
         private ToolStripButton CoolDownButton;
-        private TextBox textBox1;
+        private TextBox PowerDrawTextBox;
         private Label label8;
     }
 }
