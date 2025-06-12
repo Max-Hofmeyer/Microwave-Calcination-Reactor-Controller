@@ -1,16 +1,14 @@
 using Microsoft.Extensions.Logging;
 using ReactorControl.Classes;
-using ScottPlot.WinForms;
 
 namespace ReactorControl;
 
 public partial class MainForm : Form
 {
-    private readonly ComPortManager _portManager;
     private readonly ILogger<MainForm> _logger;
+    private readonly ComPortManager _portManager;
     private readonly TestManager _testManager;
-    private bool _watchdogError;
-    private bool _unknownError;
+    private string _lastDebugCommand;
 
     public MainForm(ComPortManager comPortManager, TestManager testManager, ILogger<MainForm> logger) {
         InitializeComponent();
@@ -22,29 +20,29 @@ public partial class MainForm : Form
         _testManager.TestStateChanged += OnTestStateChanged;
     }
 
+
     //Executes when the app is finished loading. Grabs COM ports and sets up graph
     private void MainForm_Load(object sender, EventArgs e) {
         ComPortComboBox.DataSource = ComPortManager.GetAvailableComPorts();
-        StopTestButton.Enabled = false;
-        StartTestButton.Enabled = false;
-        CoolDownButton.Enabled = false;
-        DisconnectCOMButton.Enabled = false;
+        LockUI();
+        ConnectionLockUI();
+
         _testManager.TargetTemp = TargetTempInput.Value;
         _testManager.DeltaTemp = DeltaTInput.Value;
         _testManager.TargetHoldTime = TargetHoldTimeInput.Value;
+        _testManager.Emissivity = emissivityInput.Value;
+        _testManager.TestMode = false;
 
         //TemperaturePlot.Plot.Title("Temperature vs. Time");
 
         TemperaturePlot.Plot.XLabel("Time (s)");
         TemperaturePlot.Plot.YLabel("Temperature (°C)");
-        TemperaturePlot.Plot.Axes.SetLimitsX(0, 604800);
         TemperaturePlot.Plot.Axes.AutoScale();
-        MessageBoxLog(LogLevel.Information, "App Loaded");
     }
 
-    private void MainForm_Closing(Object sender, FormClosingEventArgs e) {
+    private void MainForm_Closing(object sender, FormClosingEventArgs e) {
         TryStopTest();
-        TryDisconnectFromPort();
+        _portManager.DisconnectFromPort();
     }
 
     #region Button Click Events
@@ -64,6 +62,7 @@ public partial class MainForm : Form
         MessageBoxLog(LogLevel.Information, "Sending start command");
         TryStartTest();
     }
+
     private void CoolDownButton_Click(object sender, EventArgs e) {
         MessageBoxLog(LogLevel.Information, "Sending cooldown command");
         TryStartCooldown();
@@ -72,29 +71,6 @@ public partial class MainForm : Form
     private void StopTestButton_Click(object sender, EventArgs e) {
         MessageBoxLog(LogLevel.Information, "Sending stop command");
         TryStopTest();
-    }
-
-    private void ExportButton_Click(object sender, EventArgs e) {
-        try {
-            _testManager.ExportDataToCSV(null);
-            MessageBoxLog(LogLevel.Information, "Successfully saved data to a CSV on the desktop");
-        }
-        catch (Exception ex) {
-            MessageBoxLog(LogLevel.Error, "Failed to export data to CSV: " + ex.Message);
-        }
-    }
-
-    private void ClearChartButton_Click(object sender, EventArgs e) {
-        var result = System.Windows.Forms.MessageBox.Show(
-            "Are you sure you want to clear the chart? All data from this session will be lost.",
-            "Clear Chart?",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Warning
-        );
-
-        if (result != DialogResult.Yes) return;
-
-        ClearChart();
     }
 
     private void AutoScaleChartButton_Click(object sender, EventArgs e) {
@@ -107,40 +83,61 @@ public partial class MainForm : Form
         TryDisconnectFromPort();
     }
 
-    //private void ResetButton_Click(object sender, EventArgs e) {
-    //    var result = System.Windows.Forms.MessageBox.Show(
-    //        "Are you sure you want to reset the app? All data is deleted and a running test will be stopped",
-    //        "Reset?",
-    //        MessageBoxButtons.YesNo,
-    //        MessageBoxIcon.Warning
-    //    );
-
-    //    if (result != DialogResult.Yes) return;
-    //    ResetApp();
-    //}
-
     private void ClearMessageButton_Click(object sender, EventArgs e) {
         MessageBox.Text = string.Empty;
     }
 
-    private void OverrideSafeNumbers_Click(object sender, EventArgs e) {
+    private void powerModeCheckBox_CheckedChanged(object sender, EventArgs e) {
+        TogglePowerMode();
+    }
+
+    private void chartClearItem_Click(object sender, EventArgs e) {
         var result = System.Windows.Forms.MessageBox.Show(
-            "Are you sure you want to override input limits for this test? This may cause damage or undefined behavior",
-            "Disable Limits?",
+            "Are you sure you want to clear the chart? All data from this session will be lost.",
+            "Clear Chart?",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning
         );
 
         if (result != DialogResult.Yes) return;
 
-        _testManager.DisableLimits = true;
-        MessageBoxLog(LogLevel.Warning, "Input limits have been disabled");
+        ResetData();
+    }
+
+    private void autoScaleOnItem_Click(object sender, EventArgs e) {
+        bool autoscaled = TemperaturePlot.Plot.Axes.ContinuouslyAutoscale;
+        TemperaturePlot.Plot.Axes.ContinuouslyAutoscale = !autoscaled;
+        autoScaleOnItem.Checked = !autoscaled;
+        MessageBoxLog(LogLevel.Information, autoscaled == false ? "Always autoscale enabled" : "Always autoscale disabled");
+    }
+
+    private void toolStripMenuItem3_Click(object sender, EventArgs e) {
+        bool interpolated = InterpolateChart.Checked;
+        InterpolateChart.Checked = !interpolated;
+        interpolateChartItem.Checked = !interpolated;
+    }
+
+    private void exportDataToolStripMenuItem_Click(object sender, EventArgs e) {
+        try {
+            _testManager.ExportDataToCSV(null);
+            MessageBoxLog(LogLevel.Information, "Successfully saved data to a CSV on the desktop");
+        }
+        catch (Exception ex) {
+            MessageBoxLog(LogLevel.Error, "Failed to export data to CSV: " + ex.Message);
+        }
+    }
+
+    private void testModeToolStripMenuItem_Click(object sender, EventArgs e) {
+        bool testMode = _testManager.TestMode;
+        _testManager.TestMode = !testMode;
+        testModeToolStripMenuItem.Checked = !testMode;
     }
 
     #endregion Button Click Events
 
 
     #region UI Helpers
+
     private void DeltaTInput_ValueChanged(object sender, EventArgs e) {
         _testManager.DeltaTemp = DeltaTInput.Value;
     }
@@ -153,35 +150,51 @@ public partial class MainForm : Form
         _testManager.TargetHoldTime = TargetHoldTimeInput.Value;
     }
 
+    private void emissivityInput_ValueChanged(object sender, EventArgs e) {
+        _testManager.Emissivity = emissivityInput.Value;
+    }
     private void TryConnectToPort(string portName) {
         try {
-            ConnectButton.Enabled = false;
             MessageBoxLog(LogLevel.Information, "Connecting to " + portName);
             _portManager.ConnectToPort(portName);
             _testManager.SendCheckStatusCommand();
+            UnlockUI();
+
+            ComPortComboBox.Enabled = false;
+            ConnectButton.Enabled = false;
+            DisconnectCOMButton.Enabled = true;
         }
         catch (Exception ex) {
             ConnectButton.Enabled = true;
+            ComPortComboBox.Enabled = true;
+            DisconnectCOMButton.Enabled = false;
             MessageBoxLog(LogLevel.Error, "Failed to connect to " + portName + ": " + ex.Message);
         }
     }
 
     private void TryDisconnectFromPort() {
-        if (!_portManager.IsConnected) return;
         try {
-            MessageBoxLog(LogLevel.Information, "Disconnecting from " + ComPortComboBox.SelectedItem);
             _portManager.DisconnectFromPort();
-            ConnectButton.Enabled = true;
+            if (_portManager.IsConnected) return;
 
+            LockUI();
+            ConnectionLockUI();
+            toolStrip1.BackColor = Color.FromArgb(240, 240, 240);
+            MessageBoxLog(LogLevel.Information, "Disconnected from " + ComPortComboBox.SelectedItem);
         }
         catch (Exception ex) {
-            MessageBoxLog(LogLevel.Error, "Failed to disconnect from " + ": " + ex.Message);
+            MessageBoxLog(LogLevel.Error, "Failed to disconnect from:" + ex.Message);
         }
     }
 
     private void TryStartTest() {
         try {
+            _testManager.TargetTemp = TargetTempInput.Value;
+            _testManager.DeltaTemp = DeltaTInput.Value;
+            _testManager.TargetHoldTime = TargetHoldTimeInput.Value;
+            _testManager.PowerMode = powerModeCheckBox.Checked;
             _testManager.SendStartTestCommand();
+            ResetData();
         }
         catch (Exception ex) {
             MessageBoxLog(LogLevel.Error, "Start command failed: " + ex.Message);
@@ -190,7 +203,7 @@ public partial class MainForm : Form
 
     private void TryStartCooldown() {
         try {
-            _testManager.SendCooldownCommand();
+            _testManager.SubmitCommand(Models.ReactorCommandsEnum.Cooldown);
         }
         catch (Exception ex) {
             MessageBoxLog(LogLevel.Error, "Cooldown command failed: " + ex.Message);
@@ -199,138 +212,140 @@ public partial class MainForm : Form
 
     private void TryStopTest() {
         try {
-            _testManager.SendStopTestCommand();
+            _testManager.SubmitCommand(Models.ReactorCommandsEnum.Stop);
         }
         catch (Exception ex) {
-            MessageBoxLog(LogLevel.Error, "Stop command failed, use stop button if needed: " + ex.Message);
+            MessageBoxLog(LogLevel.Error, "Stop command failed. Use stop button if needed: " + ex.Message);
         }
     }
 
-    private void OnCommandReceived(CommandPacket command) {
+    //executes every time a command is received, used mainly to refresh UI and route debug messages 
+    private void OnCommandReceived(Models.CommandPacket command) {
+        //wait until UI thread 
         if (InvokeRequired) {
-            BeginInvoke(new Action<CommandPacket>(OnCommandReceived), command);
+            BeginInvoke(new Action<Models.CommandPacket>(OnCommandReceived), command);
             return;
         }
 
-        switch (command.Command) {
-            case ReactorCommandsEnum.Data:
-                UpdateUI();
-                break;
+        if (command.Command == Models.ReactorCommandsEnum.Data)
+            if (!string.IsNullOrEmpty(command.DebugMessage))
+                MessageBoxLog(LogLevel.Critical, command.DebugMessage.Trim());
 
-            case ReactorCommandsEnum.Debug:
-                if (command.DebugMessage is null) break;
-                MessageBoxLog(LogLevel.Critical, command.DebugMessage);
-                break;
+        if (command is { Command: Models.ReactorCommandsEnum.Debug, DebugMessage: not null })
+            MessageBoxLog(LogLevel.Critical, command.DebugMessage);
 
-            case ReactorCommandsEnum.Init:
-            case ReactorCommandsEnum.Start:
-            case ReactorCommandsEnum.Stop:
-                if (_testManager.TestFinished)
-                {
-                    System.Windows.Forms.MessageBox.Show(
-                        "Setpoint time elapsed, test is finished",
-                        "Finished",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information
-                    );
-                }
-                
-                break;
-
-            case ReactorCommandsEnum.InternalError:
-            case ReactorCommandsEnum.Cooldown:
-            default:
-                break;
-        }
+        UpdateUI();
     }
 
-    private void OnTestStateChanged(TestState state) {
 
+    //change UI based on the test state sent back by the reactor
+    private void OnTestStateChanged(Models.TestState state) {
+        //wait until UI thread 
         if (InvokeRequired) {
-            BeginInvoke(new Action<TestState>(OnTestStateChanged), state);
+            BeginInvoke(new Action<Models.TestState>(OnTestStateChanged), state);
             return;
         }
 
+        toolStrip1.BackColor = Color.FromArgb(185, 209, 234);
         switch (state) {
-            case TestState.Running:
+            case Models.TestState.Running:
+                toolStrip1.BackColor = Color.FromArgb(255, 174, 0);
                 MessageBoxLog(LogLevel.Information, "Test is running");
                 LockUI();
                 break;
 
-            case TestState.CoolingDown:
+            case Models.TestState.CoolingDown:
+                toolStrip1.BackColor = Color.FromArgb(69, 137, 255);
                 MessageBoxLog(LogLevel.Information, "Test is cooling down");
+                CoolDownButton.Enabled = false;
+                StartTestButton.Enabled = true;
+                if (_testManager.TestFinished) {
+                    System.Windows.Forms.MessageBox.Show(
+                        "Setpoint time elapsed, test is finished. Cooling down",
+                        "Finished",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                    StartTestButton.Enabled = false;
+                }
+
                 break;
 
-            case TestState.Stopped:
+            case Models.TestState.Stopped:
                 MessageBoxLog(LogLevel.Information, "Test has been stopped");
                 UnlockUI();
-                break;
 
-            case TestState.Unknown:
-                if (!_unknownError) {
+                //if app detected a reactor crash notify the user
+                if (_testManager.CommandLastReceived.WithErrors.HasValue &&
+                    _testManager.CommandLastReceived.WithErrors.Value)
                     System.Windows.Forms.MessageBox.Show(
-                        "Reactor is in an unknown state, use stop button if needed",
-                        "ERROR",
+                        "Microwave hard crashed, test has been stopped",
+                        "Crash",
                         MessageBoxButtons.OK,
-                        MessageBoxIcon.Error
+                        MessageBoxIcon.Stop
                     );
-                    _unknownError = true;
-                    MessageBoxLog(LogLevel.Error, "Command failed, use stop button if needed");
-                }
                 break;
 
-            case TestState.Idle:
+            case Models.TestState.Idle:
                 MessageBoxLog(LogLevel.Information, "Connection successful");
-                _portManager.IsConnected = true;
-                StartTestButton.Enabled = true;
+                UnlockUI();
                 ConnectButton.Enabled = false;
+                ComPortComboBox.Enabled = false;
                 break;
 
-            case TestState.Frozen:
-                if (!_watchdogError) {
-                    HandleFrozenTest();
-                    _watchdogError = true;
-                    ConnectButton.Enabled = true;
-                }
+            case Models.TestState.Disconnected:
+                System.Windows.Forms.MessageBox.Show(
+                    "USB connection error. Failed to connect to microwave or the USB was unplugged during a test",
+                    "Disconnected",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Stop
+                );
+                MessageBoxLog(LogLevel.Information, "Microwave disconnected. Resetting app");
+                TryDisconnectFromPort();
                 break;
 
+            case Models.TestState.Frozen:
+                MessageBoxLog(LogLevel.Information, "Watchdog elapsed");
+                break;
+
+            case Models.TestState.Unknown:
             default:
                 return;
         }
     }
 
-    private void ClearChart() {
-        _testManager.ClearData();
-        TemperaturePlot.Plot.Clear();
-        TemperaturePlot.Refresh();
-        MessageBoxLog(LogLevel.Information, "Chart has been cleared");
-    }
-
-    //private void ResetApp() {
-    //    ClearChart();
-    //    TryStopTest();
-    //    TryDisconnectFromPort();
-    //    UnlockUI();
-    //    _unknownError = false;
-    //    _watchdogError = false;
-    //    //todo make reset test a thing in test manager
-    //    _testManager.CurrentTestState = TestState.Unknown;
-    //    MessageBoxLog(LogLevel.Information, "App has been reset");
-    //}
-
+    //display the temperature data on the chart and boxes everytime data is received 
     private void UpdateUI() {
-        try
-        {
-            var temperatureData = _testManager.GetTemperatureValues();
-            var timeStamps = _testManager.GetTimeValues();
+        try {
+            List<double> temperatureData;
+            List<double> timeStamps;
+            var highestTemp = 0.0;
+            var rateOfChangeTemp = 0.0;
 
-            var highestTemp = temperatureData.Max();
-            var lowestTemp = temperatureData.Min();
+            if (InterpolateChart.Checked) {
+                temperatureData = _testManager.GetTemperatureInterpolatedValues();
+                timeStamps = _testManager.GetTimeInterpolatedValues();
+            }
+            else {
+                temperatureData = _testManager.GetTemperatureValues();
+                timeStamps = _testManager.GetTimeValues();
+            }
+
             var currentTemp = temperatureData.LastOrDefault();
             var currentPower = _testManager.GetLatestPowerValue();
 
+            if (temperatureData.Count > 0)
+                highestTemp = temperatureData.Max();
+
+            if (temperatureData.Count > 6) {
+                rateOfChangeTemp = temperatureData[^1] - temperatureData[^6];
+
+                if (InterpolateChart.Checked)
+                    currentTemp = temperatureData.TakeLast(6).Average();
+            }
+
             HighestTempBox.Text = $@"{highestTemp:0.0}";
-            LowestTempBox.Text = $@"{lowestTemp:0.0}";
+            LowestTempBox.Text = $@"{rateOfChangeTemp:0.0}";
             CurrentTempBox.Text = $@"{currentTemp:0.0}";
             PowerDrawTextBox.Text = $@"{currentPower:0.0}";
 
@@ -338,9 +353,9 @@ public partial class MainForm : Form
             TemperaturePlot.Plot.Add.Scatter(timeStamps.ToArray(), temperatureData.ToArray());
             TemperaturePlot.Refresh();
         }
-        catch
-        {
-            MessageBoxLog(LogLevel.Warning, "Failed to update UI");
+        catch (Exception ex) {
+            Console.WriteLine($@"Error in UI update: {ex.Message}");
+            //MessageBoxLog(LogLevel.Warning, "No data to display. Check temperature sensor connections");
         }
     }
 
@@ -351,6 +366,9 @@ public partial class MainForm : Form
         ComPortComboBox.Enabled = false;
         ConnectButton.Enabled = false;
         DisconnectCOMButton.Enabled = false;
+        TargetHoldTimeInput.Enabled = false;
+        powerModeCheckBox.Enabled = false;
+        emissivityInput.Enabled = false;
         StopTestButton.Enabled = true;
         CoolDownButton.Enabled = true;
     }
@@ -360,44 +378,65 @@ public partial class MainForm : Form
         DeltaTInput.Enabled = true;
         StartTestButton.Enabled = true;
         ComPortComboBox.Enabled = true;
-        ConnectButton.Enabled = true;
-        DisconnectCOMButton.Enabled = false;
+        DisconnectCOMButton.Enabled = true;
+        TargetHoldTimeInput.Enabled = true;
+        powerModeCheckBox.Enabled = true;
+        emissivityInput.Enabled = true;
         CoolDownButton.Enabled = false;
         StopTestButton.Enabled = false;
     }
 
-    private void HandleFrozenTest() {
-        var result = System.Windows.Forms.MessageBox.Show(
-            "App has lost communication with reactor. Would you like the app to try and restore connection? If connection isn't restored, closed the app and power cycle the reactor",
-            "Attempt to restore connection?",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Error
-        );
+    private void ConnectionLockUI() {
+        StopTestButton.Enabled = false;
+        CoolDownButton.Enabled = false;
+        ConnectButton.Enabled = true;
+        ComPortComboBox.Enabled = true;
+    }
 
-        if (result != DialogResult.Yes) return;
-        _portManager.HandleFrozenPort();
+    private void TogglePowerMode() {
+        var powerMode = powerModeCheckBox.Checked;
+        _testManager.PowerMode = powerMode;
+        TargetTempInput.Visible = !powerMode;
+        DeltaTInput.Visible = !powerMode;
+        label2.Visible = !powerMode;
+        label3.Visible = !powerMode;
+    }
+
+    private void ResetData() {
+        _testManager.ClearData();
+        TemperaturePlot.Plot.Clear();
+        CurrentTempBox.Clear();
+        HighestTempBox.Clear();
+        PowerDrawTextBox.Clear();
+        LowestTempBox.Clear();
+        TemperaturePlot.Refresh();
     }
 
     private void MessageBoxLog(LogLevel level, string message) {
         _logger.Log(level, message);
-        if (level < LogLevel.Information) return;
+        if (level < LogLevel.Information || _lastDebugCommand == message) return;
+        _lastDebugCommand = message;
+        var stamp = DateTime.Now.ToString("h:mm tt");
+        var messages = message.Split(',').Select(m => m.Trim());
 
-        var stamp = DateTime.Now.ToString("MM/dd/yyyy h:mm tt");
+        foreach (var s in messages) {
+            if (string.IsNullOrEmpty(s)) continue;
 
-        string levelLabel = string.Empty;
-        if (level is not (LogLevel.Information or LogLevel.Critical)) {
-            levelLabel = " [" + level + "] ";
+            var levelLabel = string.Empty;
+            if (level is not (LogLevel.Information or LogLevel.Critical)) levelLabel = " [" + level + "] ";
+            if (level is LogLevel.Critical) levelLabel = "[Reactor] ";
+            MessageBox.AppendText($"{levelLabel + s + " - " + stamp}\r\n");
+            MessageBox.ScrollToCaret();
         }
+    }
 
-        if (level is LogLevel.Critical)
-        {
-            levelLabel = " [Reactor] ";
-        }
 
-        MessageBox.AppendText($"{levelLabel + message + " - " + stamp}\r\n");
-        MessageBox.ScrollToCaret();
+    private void InterpolateChart_CheckedChanged(object sender, EventArgs e) {
+        UpdateUI();
     }
 
     #endregion UI Helpers
 
+
+   
 }

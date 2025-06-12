@@ -7,16 +7,29 @@ using System.IO.Ports;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Thread = System.Threading.Thread;
+using System.Timers;
+using System.Text.RegularExpressions;
 
 namespace ReactorControl.Classes;
 
 public class ComPortManager
 {
     private SerialPort? _connectedPort;
-    private StringBuilder _bufferStream = new();
+    private readonly System.Timers.Timer _connectionTimer = new (ConnectionTimeout){ AutoReset = false };
+    private readonly StringBuilder _bufferStream = new();
+    private readonly object _serialPortLock = new();
+    private int _overrunCount = 0;
+    private const int ConnectionTimeout = 3000; //3 seconds
 
-    public bool IsConnected;
-    public event Action<CommandPacket>? CommandReceived;
+    public ComPortManager()
+    {
+        _connectionTimer.Elapsed += OnConnectionTimeout;
+    }
+
+    public bool IsConnected { get; set; }
+
+    public event Action<Models.CommandPacket>? CommandReceived;
+
 
     //returns all available COM ports the machine has a device connected to
     public static string[] GetAvailableComPorts()
@@ -24,75 +37,117 @@ public class ComPortManager
         return SerialPort.GetPortNames();
     }
 
-    //Attempts to connect to the reactor controller, does the handshaking and will put the controller in an idle state
+    //attempts to connect to the reactor controller and will put it in an idle state is successful
     public void ConnectToPort(string portName)
     {
-        if (IsConnected)
-        {
-            throw new InvalidOperationException("COM port is already connected");
-        }
-
-        _connectedPort = new SerialPort(portName, 115200);
+        if (IsConnected) return;
 
         try
         {
+            _connectedPort = new SerialPort(portName, 115200)
+            {
+                ReadBufferSize = 4096,
+                WriteBufferSize = 2048
+            };
             _connectedPort.Open();
+            _connectedPort.DiscardInBuffer();
+            _connectedPort.DiscardOutBuffer();
             _connectedPort.DataReceived += OnDataReceived;
+            _connectedPort.ErrorReceived += OnErrorReceived;
+            _overrunCount = 0;
+            IsConnected = true;
+
+            _connectionTimer.Interval = ConnectionTimeout;
+            _connectionTimer.Start();
         }
         catch
         {
-            _connectedPort.DataReceived -= OnDataReceived;
             DisconnectFromPort();
-            throw;
         }
+        
     }
 
     //disconnects the active COM port 
     public void DisconnectFromPort()
     {
-        if (_connectedPort is null) return;
+        lock (_serialPortLock)
+        {
+            if (_connectedPort is null) return;
 
-        //todo make this more managed
-        //OnCommandRequested(new CommandPacket { Command = ReactorCommandsEnum.Stop, Checksum = (byte)ReactorCommandsEnum.Stop ^ 0xFF });
-        _connectedPort.DataReceived -= OnDataReceived;
-        _connectedPort.Close();
-        
-        _connectedPort = null;
-        IsConnected = false;
+            try
+            { 
+                _connectionTimer.Stop();
+                _connectedPort.DataReceived -= OnDataReceived;
+                _connectedPort.ErrorReceived -= OnErrorReceived;
+                _connectedPort.DiscardInBuffer();
+                _connectedPort.DiscardOutBuffer();
+                _connectedPort?.Close();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($@"Failed to disconnect from port: {ex.Message}");
+            }
+            finally
+            {
+                _connectedPort = null;
+                IsConnected = false;
+            }
+        }
     }
 
-    public void HandleFrozenPort()
+    public void OnCommandRequested(Models.CommandPacket command)
     {
-        _bufferStream.Clear();
-        var portInfo = _connectedPort;
+        lock (_serialPortLock)
+        {
+            if (_connectedPort is null || !_connectedPort.IsOpen) return;
+            var serializedCommand = JsonSerializer.Serialize(command) + "\n";
+            _connectedPort.Write(serializedCommand);
+        }
+    }
+
+    private void OnConnectionTimeout(object? sender, ElapsedEventArgs e)
+    {
+
+        if (_connectedPort is null || !IsConnected) return;
+
+        var cmd = new Models.CommandPacket { Command = Models.ReactorCommandsEnum.InternalError, WithErrors = true };
+        CommandReceived?.Invoke(cmd);
         DisconnectFromPort();
-        
-        _connectedPort = portInfo;
-        if (portInfo is null) return;
-        ConnectToPort(portInfo.PortName);
-    }
-
-    public void OnCommandRequested(CommandPacket command)
-    {
-        if (_connectedPort is null || !_connectedPort.IsOpen) return;
-
-        var serializedCommand = JsonSerializer.Serialize(command) + "\n";
-        _connectedPort.Write(serializedCommand);
     }
 
     private void OnDataReceived(object sender, SerialDataReceivedEventArgs e)
     {
+        if (_connectedPort is null || _connectedPort.BytesToRead <= 0) return;
+
         try
         {
-            if (_connectedPort is null || _connectedPort.BytesToRead <= 0) return;
             _bufferStream.Append(_connectedPort.ReadExisting());
             ProcessBufferStream();
         }
-        catch
+        catch(Exception ex)
         {
-            //todo if data is being sent while port is closed/reopen this will be thrown
+            Console.WriteLine($@"Error while receiving data: {ex.Message}");
         }
     }
+
+    private void OnErrorReceived(object sender, SerialErrorReceivedEventArgs e) {
+        if (_connectedPort is null || !IsConnected) return;
+        if (e.EventType == SerialError.Overrun)
+        {
+            _overrunCount += 1;
+            _connectedPort.DiscardInBuffer();
+            _connectedPort.DiscardOutBuffer();
+
+            if (_overrunCount < 2) return;
+
+        }
+        Console.WriteLine("Serial port error: " + e.EventType);
+
+
+        var cmd = new Models.CommandPacket { Command = Models.ReactorCommandsEnum.InternalError, WithErrors = true };
+        CommandReceived?.Invoke(cmd);
+    }
+
     private void ProcessBufferStream()
     {
         var rawCommands = _bufferStream.ToString().Split(["\n"], StringSplitOptions.None);
@@ -103,14 +158,28 @@ public class ComPortManager
 
             var jsonStream = command.Trim();
 
-            try {
-                var commandPacket = JsonSerializer.Deserialize<CommandPacket>(jsonStream);
-                CommandReceived?.Invoke(commandPacket);
+            //replacing non-printable characters with empty
+            //jsonStream = Regex.Replace(jsonStream, @"[^\u0020-\u007E]", string.Empty);
+
+            //on reboot the esp32 will have this keyword, will only occur if the microcontrollers watchdog resets 
+            if (jsonStream.Contains("SW_CPU_RESET"))
+            {
+                var stop = new Models.CommandPacket { Command = Models.ReactorCommandsEnum.Stop, WithErrors = true};
+                CommandReceived?.Invoke(stop);
+                _bufferStream.Clear();
             }
-            catch {
-                string what = jsonStream;
-                //todo add logging
-                //CommandReceived?.Invoke(new CommandPacket { Command = ReactorCommandsEnum.Debug });
+
+            try {
+                var commandPacket = JsonSerializer.Deserialize<Models.CommandPacket>(jsonStream);
+                CommandReceived?.Invoke(commandPacket);
+                if (_connectionTimer.Enabled)
+                {
+                    _connectionTimer.Stop();
+                }
+            }
+            catch(Exception e)
+            {
+                var error = ("Json failed, {0}, {1}", e.Message, jsonStream);
             }
 
         }
@@ -118,15 +187,4 @@ public class ComPortManager
         _bufferStream.Clear();
         _bufferStream.Append(rawCommands.Last());
     }
-}
-
-public enum ReactorCommandsEnum
-{
-    Init,
-    Start,
-    Stop,
-    Cooldown,
-    Data,
-    Debug,
-    InternalError,
 }

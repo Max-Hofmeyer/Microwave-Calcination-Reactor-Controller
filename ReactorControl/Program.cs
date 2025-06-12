@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ReactorControl.Classes;
+using Serilog;
 
 namespace ReactorControl
 {
@@ -16,6 +17,9 @@ namespace ReactorControl
             // see https://aka.ms/applicationconfiguration.
             try
             {
+                Log.Logger = new LoggerConfiguration().MinimumLevel.Debug().WriteTo.Console().WriteTo
+                    .File("logs/log.txt", rollingInterval: RollingInterval.Day).CreateLogger();
+
                 ApplicationConfiguration.Initialize();
 
 
@@ -48,10 +52,9 @@ namespace ReactorControl
             services.AddSingleton(config);
 
             services.AddTransient<MainForm>();
-            services.AddLogging(configure =>
-            {
-                configure.AddConsole();
-                configure.AddDebug();
+            services.AddLogging(loggingBuilder => {
+                loggingBuilder.ClearProviders(); // Remove default providers
+                //loggingBuilder.AddSerilog(); // Add Serilog
             });
         }
 
