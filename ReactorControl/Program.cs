@@ -15,13 +15,12 @@ namespace ReactorControl
         static void Main() {
             // To customize application configuration such as set high DPI settings or default font,
             // see https://aka.ms/applicationconfiguration.
+            Log.Logger = new LoggerConfiguration().MinimumLevel.Debug().WriteTo.Console().WriteTo
+                .File("logs/log.txt", rollingInterval: RollingInterval.Day).CreateLogger();
+
             try
             {
-                Log.Logger = new LoggerConfiguration().MinimumLevel.Debug().WriteTo.Console().WriteTo
-                    .File("logs/log.txt", rollingInterval: RollingInterval.Day).CreateLogger();
-
                 ApplicationConfiguration.Initialize();
-
 
                 var serviceCollection = new ServiceCollection();
                 ConfigureServices(serviceCollection);
@@ -36,25 +35,32 @@ namespace ReactorControl
                 Application.Run(mainForm);
                 UnsubscribeFromEvents(comPortManager, testManager);
             }
-            catch
+            catch (Exception ex)
             {
+                Log.Fatal(ex, "App crashed");
                 Application.Exit();
+            }
+            finally
+            {
+                Log.CloseAndFlush();
             }
         }
 
         //register the classes since were using dependency injection
         private static void ConfigureServices(IServiceCollection services)
         {
+            services.AddSingleton<StateStore>();
             services.AddSingleton<ComPortManager>();
             services.AddSingleton<TestManager>();
+            services.AddSingleton<MainForm>();
+
 
             var config = LoadConfig();
             services.AddSingleton(config);
 
-            services.AddTransient<MainForm>();
             services.AddLogging(loggingBuilder => {
-                loggingBuilder.ClearProviders(); // Remove default providers
-                //loggingBuilder.AddSerilog(); // Add Serilog
+                loggingBuilder.ClearProviders();                        // drop Console/WPF defaults
+                loggingBuilder.AddSerilog(Log.Logger, dispose: true);   // use our Serilog instance
             });
         }
 
@@ -82,13 +88,15 @@ namespace ReactorControl
 
         private static void SubscribeToEvents(ComPortManager comPortManager, TestManager testManager)
         {
-            comPortManager.CommandReceived += testManager.OnCommandReceived;
+            comPortManager.MessageReceived += testManager.OnMessageReceived;
+            comPortManager.AckReceived += testManager.OnAckReceived;
             testManager.CommandRequested += comPortManager.OnCommandRequested;
             testManager.WatchDogTimer.Elapsed += testManager.OnWatchDogElapsed;
         }
 
         private static void UnsubscribeFromEvents(ComPortManager comPortManager, TestManager testManager) {
-            comPortManager.CommandReceived -= testManager.OnCommandReceived;
+            comPortManager.MessageReceived -= testManager.OnMessageReceived;
+            comPortManager.AckReceived -= testManager.OnAckReceived;
             testManager.CommandRequested -= comPortManager.OnCommandRequested;
             testManager.WatchDogTimer.Elapsed -= testManager.OnWatchDogElapsed;
         }

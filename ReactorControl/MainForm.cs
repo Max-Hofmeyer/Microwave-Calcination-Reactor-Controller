@@ -1,43 +1,84 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using ReactorControl.Classes;
+using ReactorControl.Types;
+using ScottPlot;
+using static System.Windows.Forms.AxHost;
+using Color = System.Drawing.Color;
+using Timer = System.Windows.Forms.Timer;
 
 namespace ReactorControl;
 
 public partial class MainForm : Form
 {
     private readonly ILogger<MainForm> _logger;
+    private readonly StateStore _store;
     private readonly ComPortManager _portManager;
     private readonly TestManager _testManager;
-    private string _lastDebugCommand;
+    private readonly Timer _pollTimer;
+    //private readonly Stopwatch _inputTimeout = new();
+    private string[] _lastPorts = [];
+    private DeviceState _previousState;
+    private bool _setpointHit = false;
+    private double _setpoint_x = 0.0;
+    private double _setpoint_y = 0.0;
 
-    public MainForm(ComPortManager comPortManager, TestManager testManager, ILogger<MainForm> logger) {
+    public MainForm(ComPortManager comPortManager, TestManager testManager, StateStore store, ILogger<MainForm> logger) {
         InitializeComponent();
+        _store = store;
         _portManager = comPortManager;
         _testManager = testManager;
         _logger = logger;
-
-        _testManager.CommandReceived += OnCommandReceived;
-        _testManager.TestStateChanged += OnTestStateChanged;
+        _pollTimer = new Timer { Interval = 25 };
+        _pollTimer.Tick += UpdateUI;
     }
-
 
     //Executes when the app is finished loading. Grabs COM ports and sets up graph
     private void MainForm_Load(object sender, EventArgs e) {
-        ComPortComboBox.DataSource = ComPortManager.GetAvailableComPorts();
+        _pollTimer.Start();
         LockUI();
-        ConnectionLockUI();
+        ConnectionUnlockUI();
+
+        _lastPorts = ComPortManager.GetAvailableComPorts();
+        ComPortToolstripComboBox.ComboBox.DataSource = _lastPorts;
 
         _testManager.TargetTemp = TargetTempInput.Value;
         _testManager.DeltaTemp = DeltaTInput.Value;
         _testManager.TargetHoldTime = TargetHoldTimeInput.Value;
         _testManager.Emissivity = emissivityInput.Value;
+        _testManager.PidKp = pidKpBox.Value;
+        _testManager.PidKi = pidKiBox.Value;
+        _testManager.PidKd = pidKdBox.Value;
         _testManager.TestMode = false;
-
-        //TemperaturePlot.Plot.Title("Temperature vs. Time");
+        _testManager.PowerMode = false;
 
         TemperaturePlot.Plot.XLabel("Time (s)");
-        TemperaturePlot.Plot.YLabel("Temperature (°C)");
+        TemperaturePlot.Plot.Axes.Left.Label.Text = "Temperature (°C)";
+        TemperaturePlot.Plot.Axes.Right.Label.Text = "Load (W)";
+
+        TemperaturePlot.Plot.Axes.Left.Label.ForeColor = ScottPlot.Colors.Blue;
+        TemperaturePlot.Plot.Axes.Left.FrameLineStyle.Color = ScottPlot.Colors.Blue;
+        TemperaturePlot.Plot.Axes.Left.FrameLineStyle.Width = 3;
+
+        TemperaturePlot.Plot.Axes.Right.Label.ForeColor = ScottPlot.Colors.Red;
+        TemperaturePlot.Plot.Axes.Right.FrameLineStyle.Color = ScottPlot.Colors.Red;
+        TemperaturePlot.Plot.Axes.Right.FrameLineStyle.Width = 3;
         TemperaturePlot.Plot.Axes.AutoScale();
+        TemperaturePlot.Plot.Axes.ContinuouslyAutoscale = true;
+
+        pidKdBox.Visible = false;
+        pidKpBox.Visible = false;
+        pidKiBox.Visible = false;
+        setPointLabel.Visible = false;
+        setPointRemainingTimeBox.Visible = false;
+        powerModeStepComboBox.Visible = false;
+        label4.Visible = false;
+        label12.Visible = false;
+        label13.Visible = false;
+        label14.Visible = false;
+
+        powerModeStepComboBox.DataSource = Enum.GetValues(typeof(PowerStep));
+        powerModeStepComboBox.DropDownStyle = ComboBoxStyle.DropDownList;
     }
 
     private void MainForm_Closing(object sender, FormClosingEventArgs e) {
@@ -47,29 +88,25 @@ public partial class MainForm : Form
 
     #region Button Click Events
 
-    private void ConnectButton_Click(object sender, EventArgs e) {
-        if (ComPortComboBox.SelectedItem is not string portName) return;
+    private void ConnectCOMButton_Click(object sender, EventArgs e) {
+        if (ComPortToolstripComboBox.SelectedItem is not string portName) return;
         _logger.LogDebug("Attempting to connect to COM port {port}", portName);
+        MessageBoxLog(LogLevel.Information, "Connecting...");
         TryConnectToPort(portName);
     }
 
-    private void RefreshCOMButton_Click(object sender, EventArgs e) {
-        ComPortComboBox.DataSource = ComPortManager.GetAvailableComPorts();
-        MessageBoxLog(LogLevel.Information, "COM ports refreshed");
-    }
-
     private void StartTestButton_Click(object sender, EventArgs e) {
-        MessageBoxLog(LogLevel.Information, "Sending start command");
+        MessageBoxLog(LogLevel.Debug, "Start command sent");
         TryStartTest();
     }
 
     private void CoolDownButton_Click(object sender, EventArgs e) {
-        MessageBoxLog(LogLevel.Information, "Sending cooldown command");
+        MessageBoxLog(LogLevel.Debug, "Cooldown command sent");
         TryStartCooldown();
     }
 
     private void StopTestButton_Click(object sender, EventArgs e) {
-        MessageBoxLog(LogLevel.Information, "Sending stop command");
+        MessageBoxLog(LogLevel.Debug, "Stop command sent");
         TryStopTest();
     }
 
@@ -87,7 +124,7 @@ public partial class MainForm : Form
         MessageBox.Text = string.Empty;
     }
 
-    private void powerModeCheckBox_CheckedChanged(object sender, EventArgs e) {
+    private void timerModeToolStripMenuItem_CheckedChanged_1(object sender, EventArgs e) {
         TogglePowerMode();
     }
 
@@ -111,24 +148,19 @@ public partial class MainForm : Form
         MessageBoxLog(LogLevel.Information, autoscaled == false ? "Always autoscale enabled" : "Always autoscale disabled");
     }
 
-    private void toolStripMenuItem3_Click(object sender, EventArgs e) {
-        bool interpolated = InterpolateChart.Checked;
-        InterpolateChart.Checked = !interpolated;
-        interpolateChartItem.Checked = !interpolated;
-    }
-
     private void exportDataToolStripMenuItem_Click(object sender, EventArgs e) {
         try {
-            _testManager.ExportDataToCSV(null);
-            MessageBoxLog(LogLevel.Information, "Successfully saved data to a CSV on the desktop");
+            _testManager.ExportDataToCSV();
+            MessageBoxLog(LogLevel.Information, "Data saved to desktop");
         }
         catch (Exception ex) {
-            MessageBoxLog(LogLevel.Error, "Failed to export data to CSV: " + ex.Message);
+            MessageBoxLog(LogLevel.Error, "Failed to export data: " + ex.Message);
         }
     }
 
     private void testModeToolStripMenuItem_Click(object sender, EventArgs e) {
         bool testMode = _testManager.TestMode;
+
         _testManager.TestMode = !testMode;
         testModeToolStripMenuItem.Checked = !testMode;
     }
@@ -153,21 +185,21 @@ public partial class MainForm : Form
     private void emissivityInput_ValueChanged(object sender, EventArgs e) {
         _testManager.Emissivity = emissivityInput.Value;
     }
+
     private void TryConnectToPort(string portName) {
         try {
-            MessageBoxLog(LogLevel.Information, "Connecting to " + portName);
+            MessageBoxLog(LogLevel.Debug, "Connecting to " + portName);
+
             _portManager.ConnectToPort(portName);
             _testManager.SendCheckStatusCommand();
-            UnlockUI();
+            ShowCommandStateChange(new DeviceState { GoodAck = true, LastCommand = Commands.Init });
 
-            ComPortComboBox.Enabled = false;
-            ConnectButton.Enabled = false;
-            DisconnectCOMButton.Enabled = true;
+            ComPortToolstripComboBox.Enabled = false;
+            ConnectToolstripButton.Enabled = false;
         }
         catch (Exception ex) {
-            ConnectButton.Enabled = true;
-            ComPortComboBox.Enabled = true;
-            DisconnectCOMButton.Enabled = false;
+            ConnectToolstripButton.Enabled = true;
+            ComPortToolstripComboBox.Enabled = true;
             MessageBoxLog(LogLevel.Error, "Failed to connect to " + portName + ": " + ex.Message);
         }
     }
@@ -177,10 +209,8 @@ public partial class MainForm : Form
             _portManager.DisconnectFromPort();
             if (_portManager.IsConnected) return;
 
-            LockUI();
-            ConnectionLockUI();
-            toolStrip1.BackColor = Color.FromArgb(240, 240, 240);
-            MessageBoxLog(LogLevel.Information, "Disconnected from " + ComPortComboBox.SelectedItem);
+            SetUI(TestState.Idle, true);
+            MessageBoxLog(LogLevel.Information, "Disconnected from " + ComPortToolstripComboBox.SelectedItem);
         }
         catch (Exception ex) {
             MessageBoxLog(LogLevel.Error, "Failed to disconnect from:" + ex.Message);
@@ -189,11 +219,19 @@ public partial class MainForm : Form
 
     private void TryStartTest() {
         try {
+
             _testManager.TargetTemp = TargetTempInput.Value;
             _testManager.DeltaTemp = DeltaTInput.Value;
             _testManager.TargetHoldTime = TargetHoldTimeInput.Value;
-            _testManager.PowerMode = powerModeCheckBox.Checked;
+            _testManager.PidKp = pidKpBox.Value;
+            _testManager.PidKi = pidKiBox.Value;
+            _testManager.PidKd = pidKdBox.Value;
+            _testManager.PowerMode = timerModeToolStripMenuItem.Checked;
+            _testManager.PowerModeStep = (PowerStep)powerModeStepComboBox.SelectedItem!;
+            _testManager.TestMode = testModeToolStripMenuItem.Checked;
+            _setpointHit = false;
             _testManager.SendStartTestCommand();
+            ShowCommandStateChange(new DeviceState { GoodAck = true, LastCommand = Commands.Start });
             ResetData();
         }
         catch (Exception ex) {
@@ -203,7 +241,9 @@ public partial class MainForm : Form
 
     private void TryStartCooldown() {
         try {
-            _testManager.SubmitCommand(Models.ReactorCommandsEnum.Cooldown);
+
+            _testManager.SendCommand(Commands.Cooldown);
+            ShowCommandStateChange(new DeviceState { GoodAck = true, LastCommand = Commands.Cooldown });
         }
         catch (Exception ex) {
             MessageBoxLog(LogLevel.Error, "Cooldown command failed: " + ex.Message);
@@ -212,163 +252,189 @@ public partial class MainForm : Form
 
     private void TryStopTest() {
         try {
-            _testManager.SubmitCommand(Models.ReactorCommandsEnum.Stop);
+
+            _testManager.SendCommand(Commands.Stop);
+            ShowCommandStateChange(new DeviceState { GoodAck = true, LastCommand = Commands.Stop });
         }
         catch (Exception ex) {
-            MessageBoxLog(LogLevel.Error, "Stop command failed. Use stop button if needed: " + ex.Message);
+            MessageBoxLog(LogLevel.Error, "Stop command failed: " + ex.Message);
         }
     }
 
-    //executes every time a command is received, used mainly to refresh UI and route debug messages 
-    private void OnCommandReceived(Models.CommandPacket command) {
-        //wait until UI thread 
-        if (InvokeRequired) {
-            BeginInvoke(new Action<Models.CommandPacket>(OnCommandReceived), command);
+    private void UpdateUI(object? sender, EventArgs eventArgs) {
+        RefreshComPorts();
+        var (status, data) = _store.Snapshot();
+
+        //if (_inputTimeout is { IsRunning: true, Elapsed.Seconds: > 3 }) {
+        //    ShowCommandStateChange(status);
+        //}
+
+        if (status == _previousState || !_portManager.IsConnected) return;
+        var points = data.Data ?? [];
+
+
+        if (!string.IsNullOrEmpty(status.StatusMessage)) {
+            MessageBoxLog(status.HasError ? LogLevel.Error : LogLevel.Information, status.StatusMessage);
+        }
+
+        if (status.SetpointHit) {
+            if (!_setpointHit)
+            {
+                var hit = points.Last().TimeStamp;
+                _setpointHit = true;
+                setPointLabel.Visible = true;
+                setPointRemainingTimeBox.Visible = true;
+                _setpoint_x = status.CurrentTemp;
+                _setpoint_y = points.Last().TimeStamp;
+
+                TemperaturePlot.Refresh();
+                MessageBoxLog(LogLevel.Information, "Setpoint hit");
+            }
+            
+        }
+
+        ShowTestElapsed(status.TestFinished);
+
+        HighestTempBox.Text = $@"{status.HighestTemp:0.0}";
+        RateOfChangeBox.Text = $@"{status.RateTemp:0.0}";
+        CurrentTempBox.Text = $@"{status.CurrentTemp:0.0}";
+        PowerDrawTextBox.Text = $@"{status.Power:0.0}";
+        MagnetronTempBox.Text = $@"{status.MagnetronTemp:0.0}";
+        PowerStepBox.Text = $@"{status.PowerStep}";
+        setPointRemainingTimeBox.Text = $@"{status.RemainingTime}";
+        _previousState = status;
+
+        if (points.Length <= 0) {
             return;
         }
 
-        if (command.Command == Models.ReactorCommandsEnum.Data)
-            if (!string.IsNullOrEmpty(command.DebugMessage))
-                MessageBoxLog(LogLevel.Critical, command.DebugMessage.Trim());
+        TemperaturePlot.Plot.Clear();
+        var timeStamps = points.Select(t => t.TimeStamp).ToArray();
+        var tempData = points.Select(t => t.Temp).ToArray();
+        var powerData = points.Select(t => t.Load).ToArray();
+        var stepData = points.Select(t => t.Step).ToArray();
 
-        if (command is { Command: Models.ReactorCommandsEnum.Debug, DebugMessage: not null })
-            MessageBoxLog(LogLevel.Critical, command.DebugMessage);
+        var tempScatter = TemperaturePlot.Plot.Add.Scatter(timeStamps, tempData);
+        var powerScatter = TemperaturePlot.Plot.Add.Scatter(timeStamps, powerData);
+        tempScatter.Axes.YAxis = TemperaturePlot.Plot.Axes.Left;
+        powerScatter.Axes.YAxis = TemperaturePlot.Plot.Axes.Right;
+        tempScatter.Color = ScottPlot.Colors.Blue;
+        powerScatter.Color = ScottPlot.Colors.Red;
+       
 
-        UpdateUI();
+        if (_setpointHit)
+        {
+            TemperaturePlot.Plot.Add.VerticalLine(_setpoint_y);
+            AutoScaleChartButton.Text = _setpoint_y.ToString();
+           TemperaturePlot.Plot.Add.HorizontalLine(_setpoint_x);
+        }
+        TemperaturePlot.Refresh();
     }
 
-
-    //change UI based on the test state sent back by the reactor
-    private void OnTestStateChanged(Models.TestState state) {
-        //wait until UI thread 
-        if (InvokeRequired) {
-            BeginInvoke(new Action<Models.TestState>(OnTestStateChanged), state);
-            return;
+    private void RefreshComPorts() {
+        var currentPorts = ComPortManager.GetAvailableComPorts();
+        if (!_portManager.IsConnected && !ConnectToolstripButton.Enabled) {
+            MessageBoxLog(LogLevel.Information, "Connection lost");
+            SetUI(TestState.Idle, true);
         }
+        if (currentPorts.SequenceEqual(_lastPorts)) return;
 
-        toolStrip1.BackColor = Color.FromArgb(185, 209, 234);
-        switch (state) {
-            case Models.TestState.Running:
-                toolStrip1.BackColor = Color.FromArgb(255, 174, 0);
-                MessageBoxLog(LogLevel.Information, "Test is running");
-                LockUI();
-                break;
+        var box = ComPortToolstripComboBox.ComboBox;
 
-            case Models.TestState.CoolingDown:
-                toolStrip1.BackColor = Color.FromArgb(69, 137, 255);
-                MessageBoxLog(LogLevel.Information, "Test is cooling down");
-                CoolDownButton.Enabled = false;
-                StartTestButton.Enabled = true;
-                if (_testManager.TestFinished) {
-                    System.Windows.Forms.MessageBox.Show(
-                        "Setpoint time elapsed, test is finished. Cooling down",
-                        "Finished",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information
-                    );
-                    StartTestButton.Enabled = false;
-                }
+        box.BeginUpdate();
+        box.DataSource = currentPorts;
+        if (currentPorts.Length <= 0) {
+            box.Text = string.Empty;
+        }
+        box.EndUpdate();
+        _lastPorts = currentPorts;
 
-                break;
+    }
 
-            case Models.TestState.Stopped:
-                MessageBoxLog(LogLevel.Information, "Test has been stopped");
-                UnlockUI();
+    //input from the user changed the state of the mcu
+    private void ShowCommandStateChange(DeviceState message) {
 
-                //if app detected a reactor crash notify the user
-                if (_testManager.CommandLastReceived.WithErrors.HasValue &&
-                    _testManager.CommandLastReceived.WithErrors.Value)
-                    System.Windows.Forms.MessageBox.Show(
-                        "Microwave hard crashed, test has been stopped",
-                        "Crash",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Stop
-                    );
-                break;
+        //_inputTimeout.Reset();
+        if (message.GoodAck) {
+            switch (message.LastCommand) {
+                case Commands.Init:
+                    string msg = "Connected to " + ComPortToolstripComboBox.ComboBox.Text;
+                    MessageBoxLog(LogLevel.Information, msg);
+                    SetUI(TestState.Idle);
+                    ConnectToolstripButton.Enabled = false;
+                    ComPortToolstripComboBox.Enabled = false;
+                    break;
 
-            case Models.TestState.Idle:
-                MessageBoxLog(LogLevel.Information, "Connection successful");
-                UnlockUI();
-                ConnectButton.Enabled = false;
-                ComPortComboBox.Enabled = false;
-                break;
+                case Commands.Start:
+                    MessageBoxLog(LogLevel.Information, "Running");
+                    LockUI();
+                    SetUI(TestState.Running);
+                    break;
 
-            case Models.TestState.Disconnected:
-                System.Windows.Forms.MessageBox.Show(
-                    "USB connection error. Failed to connect to microwave or the USB was unplugged during a test",
-                    "Disconnected",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Stop
-                );
-                MessageBoxLog(LogLevel.Information, "Microwave disconnected. Resetting app");
-                TryDisconnectFromPort();
-                break;
+                case Commands.Cooldown:
+                    MessageBoxLog(LogLevel.Information, "Cooling down");
+                    SetUI(TestState.CoolingDown);
+                    CoolDownButton.Enabled = false;
+                    break;
 
-            case Models.TestState.Frozen:
-                MessageBoxLog(LogLevel.Information, "Watchdog elapsed");
-                break;
+                case Commands.Stop:
+                    MessageBoxLog(LogLevel.Information, "Stopped");
+                    _setpointHit = false;
+                    _setpoint_x = 0;
+                    _setpoint_y = 0;
+                    SetUI(TestState.Idle);
+                    UnlockUI();
+                    break;
+            }
+        }
+        else {
+            SetUI(TestState.Idle, true);
+            ConnectionUnlockUI();
 
-            case Models.TestState.Unknown:
-            default:
-                return;
+            switch (message.LastCommand) {
+                case Commands.Init:
+                    MessageBoxLog(LogLevel.Error, "Connection timed out. Try again");
+                    break;
+
+                case Commands.Start:
+                    MessageBoxLog(LogLevel.Error, "Start command failed.");
+                    break;
+
+                case Commands.Cooldown:
+                    MessageBoxLog(LogLevel.Error, "Cooldown command failed. Halting test");
+                    break;
+
+                case Commands.Stop:
+                    MessageBoxLog(LogLevel.Error, "Stop command failed. Attempting to halt test");
+                    break;
+            }
         }
     }
 
-    //display the temperature data on the chart and boxes everytime data is received 
-    private void UpdateUI() {
-        try {
-            List<double> temperatureData;
-            List<double> timeStamps;
-            var highestTemp = 0.0;
-            var rateOfChangeTemp = 0.0;
+    //mcu changed state, show message
+    private void ShowTestElapsed(bool testFinished) {
+        if (!testFinished) return;
 
-            if (InterpolateChart.Checked) {
-                temperatureData = _testManager.GetTemperatureInterpolatedValues();
-                timeStamps = _testManager.GetTimeInterpolatedValues();
-            }
-            else {
-                temperatureData = _testManager.GetTemperatureValues();
-                timeStamps = _testManager.GetTimeValues();
-            }
+        SetUI(TestState.CoolingDown);
+        MessageBoxLog(LogLevel.Information, "Setpoint elapsed. Cooling down");
 
-            var currentTemp = temperatureData.LastOrDefault();
-            var currentPower = _testManager.GetLatestPowerValue();
-
-            if (temperatureData.Count > 0)
-                highestTemp = temperatureData.Max();
-
-            if (temperatureData.Count > 6) {
-                rateOfChangeTemp = temperatureData[^1] - temperatureData[^6];
-
-                if (InterpolateChart.Checked)
-                    currentTemp = temperatureData.TakeLast(6).Average();
-            }
-
-            HighestTempBox.Text = $@"{highestTemp:0.0}";
-            LowestTempBox.Text = $@"{rateOfChangeTemp:0.0}";
-            CurrentTempBox.Text = $@"{currentTemp:0.0}";
-            PowerDrawTextBox.Text = $@"{currentPower:0.0}";
-
-            TemperaturePlot.Plot.Clear();
-            TemperaturePlot.Plot.Add.Scatter(timeStamps.ToArray(), temperatureData.ToArray());
-            TemperaturePlot.Refresh();
-        }
-        catch (Exception ex) {
-            Console.WriteLine($@"Error in UI update: {ex.Message}");
-            //MessageBoxLog(LogLevel.Warning, "No data to display. Check temperature sensor connections");
-        }
     }
 
     private void LockUI() {
         TargetTempInput.Enabled = false;
         DeltaTInput.Enabled = false;
         StartTestButton.Enabled = false;
-        ComPortComboBox.Enabled = false;
-        ConnectButton.Enabled = false;
+        ComPortToolstripComboBox.Enabled = false;
+        ConnectToolstripButton.Enabled = false;
         DisconnectCOMButton.Enabled = false;
         TargetHoldTimeInput.Enabled = false;
-        powerModeCheckBox.Enabled = false;
+        timerModeToolStripMenuItem.Enabled = false;
         emissivityInput.Enabled = false;
+        pidKdBox.Enabled = false;
+        pidKiBox.Enabled = false;
+        pidKpBox.Enabled = false;
+        powerModeStepComboBox.Enabled = false;
+
         StopTestButton.Enabled = true;
         CoolDownButton.Enabled = true;
     }
@@ -377,25 +443,67 @@ public partial class MainForm : Form
         TargetTempInput.Enabled = true;
         DeltaTInput.Enabled = true;
         StartTestButton.Enabled = true;
-        ComPortComboBox.Enabled = true;
+        ComPortToolstripComboBox.Enabled = true;
         DisconnectCOMButton.Enabled = true;
         TargetHoldTimeInput.Enabled = true;
-        powerModeCheckBox.Enabled = true;
+        timerModeToolStripMenuItem.Enabled = true;
         emissivityInput.Enabled = true;
+        pidKdBox.Enabled = true;
+        pidKiBox.Enabled = true;
+        pidKpBox.Enabled = true;
+        powerModeStepComboBox.Enabled = true;
+
         CoolDownButton.Enabled = false;
         StopTestButton.Enabled = false;
+        ConnectToolstripButton.Enabled = false;
+    }
+
+    private void ConnectionUnlockUI() {
+        StopTestButton.Enabled = false;
+        StartTestButton.Enabled = false;
+        CoolDownButton.Enabled = false;
+        DisconnectCOMButton.Enabled = false;
+        TargetTempInput.Enabled = false;
+        DeltaTInput.Enabled = false;
+        pidKdBox.Enabled = false;
+        pidKiBox.Enabled = false;
+        pidKpBox.Enabled = false;
+        powerModeStepComboBox.Enabled = false;
+        TargetHoldTimeInput.Enabled = false;
+        timerModeToolStripMenuItem.Enabled = false;
+        emissivityInput.Enabled = false;
+
+        ConnectToolstripButton.Enabled = true;
+        ComPortToolstripComboBox.Enabled = true;
     }
 
     private void ConnectionLockUI() {
+        TargetHoldTimeInput.Enabled = true;
+        timerModeToolStripMenuItem.Enabled = true;
+        emissivityInput.Enabled = true;
+        StartTestButton.Enabled = true;
+        DisconnectCOMButton.Enabled = true;
+        TargetTempInput.Enabled = true;
+        DeltaTInput.Enabled = true;
+        pidKdBox.Enabled = true;
+        pidKiBox.Enabled = true;
+        pidKpBox.Enabled = true;
+        ComPortToolstripComboBox.Enabled = true;
+        powerModeStepComboBox.Enabled = true;
+
+        ConnectToolstripButton.Enabled = false;
+        ComPortToolstripComboBox.Enabled = false;
         StopTestButton.Enabled = false;
         CoolDownButton.Enabled = false;
-        ConnectButton.Enabled = true;
-        ComPortComboBox.Enabled = true;
     }
 
     private void TogglePowerMode() {
-        var powerMode = powerModeCheckBox.Checked;
+        var powerMode = timerModeToolStripMenuItem.Checked;
         _testManager.PowerMode = powerMode;
+        label14.Visible = powerMode;
+        powerModeStepComboBox.Visible = powerMode;
+        powerModeStepComboBox.Enabled = powerMode;
+
         TargetTempInput.Visible = !powerMode;
         DeltaTInput.Visible = !powerMode;
         label2.Visible = !powerMode;
@@ -408,14 +516,54 @@ public partial class MainForm : Form
         CurrentTempBox.Clear();
         HighestTempBox.Clear();
         PowerDrawTextBox.Clear();
-        LowestTempBox.Clear();
+        RateOfChangeBox.Clear();
         TemperaturePlot.Refresh();
+    }
+
+    private void SetUI(TestState state, bool disconnected = false) {
+        switch (state) {
+            case TestState.Idle:
+                toolStrip1.BackColor = Color.FromArgb(185, 209, 234);
+                ComPortToolstripComboBox.BackColor = Color.FromArgb(185, 209, 234);
+                toolStripDropDownButton1.BackColor = Color.FromArgb(185, 209, 234);
+                ConnectionLockUI();
+                setPointRemainingTimeBox.Visible = false;
+                setPointLabel.Visible = false;
+
+                if (disconnected) {
+                    toolStrip1.BackColor = Color.FromArgb(240, 240, 240);
+                    ComPortToolstripComboBox.BackColor = Color.FromArgb(240, 240, 240);
+                    toolStripDropDownButton1.BackColor = Color.FromArgb(240, 240, 240);
+                    ConnectionUnlockUI();
+                }
+                break;
+
+            case TestState.Running:
+                toolStrip1.BackColor = Color.FromArgb(255, 174, 0);
+                ComPortToolstripComboBox.BackColor = Color.FromArgb(255, 174, 0);
+                toolStripDropDownButton1.BackColor = Color.FromArgb(255, 174, 0);
+                LockUI();
+                break;
+
+            case TestState.CoolingDown:
+                toolStrip1.BackColor = Color.FromArgb(69, 137, 255);
+                ComPortToolstripComboBox.BackColor = Color.FromArgb(69, 137, 255);
+                toolStripDropDownButton1.BackColor = Color.FromArgb(69, 137, 255);
+                setPointRemainingTimeBox.Visible = false;
+                setPointLabel.Visible = false;
+                break;
+
+            case TestState.Error:
+                UnlockUI();
+                break;
+
+        }
     }
 
     private void MessageBoxLog(LogLevel level, string message) {
         _logger.Log(level, message);
-        if (level < LogLevel.Information || _lastDebugCommand == message) return;
-        _lastDebugCommand = message;
+        if (level < LogLevel.Information) return;
+
         var stamp = DateTime.Now.ToString("h:mm tt");
         var messages = message.Split(',').Select(m => m.Trim());
 
@@ -430,13 +578,22 @@ public partial class MainForm : Form
         }
     }
 
-
-    private void InterpolateChart_CheckedChanged(object sender, EventArgs e) {
-        UpdateUI();
-    }
-
     #endregion UI Helpers
 
 
-   
+    private void tunePIDToolStripMenuItem_Click(object sender, EventArgs e) {
+        var isChecked = tunePIDToolStripMenuItem.Checked;
+        pidKdBox.Visible = isChecked;
+        pidKpBox.Visible = isChecked;
+        pidKiBox.Visible = isChecked;
+        label4.Visible = isChecked;
+        label12.Visible = isChecked;
+        label13.Visible = isChecked;
+    }
+
+    private void powerModeStepComboBox_SelectedIndexChanged(object sender, EventArgs e) {
+        _testManager.PowerModeStep = (PowerStep)powerModeStepComboBox.SelectedItem!;
+
+    }
+
 }
